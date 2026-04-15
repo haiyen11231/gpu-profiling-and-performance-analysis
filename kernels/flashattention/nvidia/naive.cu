@@ -215,14 +215,14 @@ int main() {
     dim3 block(Bc, Br);
 
     // Warmup then timed run.
-    flash_attention_forward<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
+    flash_attention_naive<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
     CUDA_CHECK(cudaEventRecord(start));
-    flash_attention_forward<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
+    flash_attention_naive<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
 
