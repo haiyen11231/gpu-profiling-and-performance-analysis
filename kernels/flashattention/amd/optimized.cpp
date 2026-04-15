@@ -9,9 +9,9 @@
  *   3. NUM_THREADS=256 (4 wavefronts) to match NVIDIA's 4-warp layout.
  *   4. Dynamic LDS (~69 KB) to accommodate the larger tiles.
  *
- * Thread block: 256 threads = 4 wavefronts
+ * Thread block: 128 threads = 2 wavefronts
  *   QK^T:      wavefront i computes S[i*16 : (i+1)*16, 0:Bc]
- *   Softmax:   threads 0-63 (one per Q-row), threads 64-255 idle
+ *   Softmax:   threads 0-31 (one per Q-row), threads 32-127 idle
  *   P·V:       wavefront i computes O[i*16 : (i+1)*16, 0:D]
  *
  * Requires: ROCm with rocWMMA; CDNA (gfx9xx) or RDNA3 (gfx11xx).
