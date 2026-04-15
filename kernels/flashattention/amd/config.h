@@ -19,8 +19,9 @@
 
 // Tile sizes for the optimized (FA2-style) kernel.
 // Br/WMMA_M must equal NUM_WAVEFRONTS so every wavefront owns one row-strip.
+// Bc=32 (not 64) keeps SMEM_BYTES ≈ 48 KB, under MI300X's 64 KB LDS limit.
 #define Br  64    // Q-tile rows  (= NUM_WAVEFRONTS × WMMA_M = 4 × 16)
-#define Bc  64    // K/V-tile rows
+#define Bc  32    // K/V-tile rows
 
 // ── optimized kernel only ────────────────────────────────────────────────────
 
