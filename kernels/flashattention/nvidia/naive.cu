@@ -39,7 +39,7 @@
 // ---------------------------------------------------------------------------
 #define Br 16    // Q block rows  (reduced from 32 to lower register pressure)
 #define Bc 16    // K/V block rows (reduced from 32 to lower register pressure)
-#define D  64    // head dimension (fixed for this example)
+#define D  256    // head dimension (fixed for this example)
 
 // Register budget check:
 //   O_acc[D=64] = 64 regs/thread  (the main consumer)

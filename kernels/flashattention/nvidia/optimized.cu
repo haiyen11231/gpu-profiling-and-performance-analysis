@@ -49,7 +49,7 @@ using namespace nvcuda;
 // ---------------------------------------------------------------------------
 #define Br   16    // Q-tile rows (matches WMMA M dimension)
 #define Bc   16    // K/V-tile rows (matches WMMA N dimension)
-#define D    64    // Head dimension
+#define D    256   // Head dimension
 #define PAD  8     // Shared memory padding (in elements) to avoid bank conflicts
                    //   Without padding: row of 64 halfs = 128 bytes = 32 banks
                    //   → every thread in a warp hits the same bank = 32-way conflict
