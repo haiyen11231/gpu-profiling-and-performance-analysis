@@ -8,7 +8,7 @@ CXX_STD     := -std=c++17
 # Compute capability: sm_70 = Volta, minimum for FP16 Tensor Cores (WMMA).
 # Run: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 # Common: 70 (V100), 75 (T4/RTX 20xx), 80 (A100), 86 (RTX 30xx), 89 (RTX 40xx)
-ARCH        := -gencode arch=compute_70,code=sm_70
+ARCH        := -gencode arch=compute_80,code=sm_80
 
 # -lineinfo preserves source-line mappings so Nsight can annotate your code.
 OPT_FLAGS   := -O3 -lineinfo
