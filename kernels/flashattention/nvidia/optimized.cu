@@ -29,15 +29,12 @@
 
 using namespace nvcuda;
 
-// Shared memory per block (~43 KB at D=256, fits in 48 KB):
-//   Q/K/V: 3 × Br×(D+PAD)×2    S: Br×Bc×4    P: Br×(Bc+PAD)×2
-//   O:     Br×D×4               m/l: 2×Br×4
 
 #define CUDA_CHECK(call)                                                      \
     do {                                                                      \
         cudaError_t err = call;                                               \
         if (err != cudaSuccess) {                                             \
-            fprintf(stderr, "CUDA error at %s:%d — %s\n",                    \
+            fprintf(stderr, "CUDA error at %s:%d - %s\n",                    \
                     __FILE__, __LINE__, cudaGetErrorString(err));             \
             exit(EXIT_FAILURE);                                               \
         }                                                                     \
@@ -74,7 +71,7 @@ void flash_attention_fma_wmma_forward(
     __shared__ float m_smem[Br];
     __shared__ float l_smem[Br];
 
-    // Load Q-tile — stays resident for the full inner loop.
+    // Load Q-tile — stays resident for the full inner loop
     const int q_row_base   = tile_idx * Br;
     const int q_tile_elems = Br * (D + PAD);
     for (int idx = tid; idx < q_tile_elems; idx += NUM_THREADS) {
@@ -83,7 +80,7 @@ void flash_attention_fma_wmma_forward(
         Q_smem[r][c] = (c < D) ? Q[(q_row_base + r) * D + c] : __float2half(0.0f);
     }
 
-    // Initialise O accumulator and softmax stats.
+    // Initialise O accumulator and softmax stats
     for (int idx = tid; idx < Br * D; idx += NUM_THREADS)
         O_smem[idx / D][idx % D] = 0.0f;
     if (tid < Br) {
@@ -92,12 +89,12 @@ void flash_attention_fma_wmma_forward(
     }
     __syncthreads();
 
-    // Main loop: sweep all K/V-tiles.
+    // Main loop: sweep all K/V-tiles
     const int num_kv_tiles = N / Bc;
 
     for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
 
-        // Load K and V tiles.
+        // Load K and V tiles
         const int kv_row_base   = kv_tile * Bc;
         const int kv_tile_elems = Bc * (D + PAD);
         for (int idx = tid; idx < kv_tile_elems; idx += NUM_THREADS) {
@@ -113,7 +110,7 @@ void flash_attention_fma_wmma_forward(
         }
         __syncthreads();
 
-        // S = Q · Kᵀ via WMMA (warp 0 only).
+        // S = Q · K^T via WMMA (warp 0 only).
         // K_smem is [Bc][D+PAD] row-major. Loading with col_major gives
         // B[k'][j] = K[j][k+k'] = Kᵀ[k+k'][j] — transposition for free.
         if (warp_id == 0) {

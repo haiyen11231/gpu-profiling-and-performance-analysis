@@ -77,6 +77,59 @@ profile-optimized: $(OPT_PROF_BIN)
 	@echo "Saved: optimized-$(TIMESTAMP).nsys-rep"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# AMD / HIP
+# ─────────────────────────────────────────────────────────────────────────────
+
+HIPCC       := hipcc
+
+AMD_DIR     := kernels/flashattention/amd
+NAIVE_AMD_SRC   := $(AMD_DIR)/naive.cpp
+OPT_AMD_SRC     := $(AMD_DIR)/optimized.cpp
+
+NAIVE_AMD_BIN       := naive_amd
+OPT_AMD_BIN         := optimized_amd
+NAIVE_AMD_PROF_BIN  := naive_amd_profile
+OPT_AMD_PROF_BIN    := optimized_amd_profile
+
+# Set --offload-arch to match your GPU (gfx90a = MI250X, gfx908 = MI100, gfx1100 = RX 7900).
+AMD_ARCH    := gfx90a
+HIP_FLAGS   := -std=c++17 -O3 -g --offload-arch=$(AMD_ARCH)
+
+.PHONY: build-amd profile-amd profile-amd-naive profile-amd-optimized
+
+build-amd: $(NAIVE_AMD_BIN) $(OPT_AMD_BIN)
+
+$(NAIVE_AMD_BIN): $(NAIVE_AMD_SRC)
+	$(HIPCC) $(HIP_FLAGS) -o $@ $<
+
+$(OPT_AMD_BIN): $(OPT_AMD_SRC)
+	$(HIPCC) $(HIP_FLAGS) -o $@ $<
+
+$(NAIVE_AMD_PROF_BIN): $(NAIVE_AMD_SRC)
+	$(HIPCC) $(HIP_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
+
+$(OPT_AMD_PROF_BIN): $(OPT_AMD_SRC)
+	$(HIPCC) $(HIP_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
+
+# Profiling — rocprof
+#   --hip-trace   captures HIP API calls and kernel launches
+#   --hsa-trace   captures HSA runtime calls (lower-level)
+profile-amd: profile-amd-naive profile-amd-optimized
+
+profile-amd-naive: $(NAIVE_AMD_PROF_BIN)
+	rocprof --hip-trace --hsa-trace \
+	    -o naive-amd-$(TIMESTAMP).csv \
+	    ./$(NAIVE_AMD_PROF_BIN)
+	@echo "Saved: naive-amd-$(TIMESTAMP).csv"
+
+profile-amd-optimized: $(OPT_AMD_PROF_BIN)
+	rocprof --hip-trace --hsa-trace \
+	    -o optimized-amd-$(TIMESTAMP).csv \
+	    ./$(OPT_AMD_PROF_BIN)
+	@echo "Saved: optimized-amd-$(TIMESTAMP).csv"
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 clean:
 	rm -f $(NAIVE_BIN) $(OPT_BIN) $(NAIVE_PROF_BIN) $(OPT_PROF_BIN)
+	rm -f $(NAIVE_AMD_BIN) $(OPT_AMD_BIN) $(NAIVE_AMD_PROF_BIN) $(OPT_AMD_PROF_BIN)
