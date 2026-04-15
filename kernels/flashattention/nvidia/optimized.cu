@@ -407,7 +407,7 @@ void naive_attention_cpu(
 // MAIN
 // ===========================================================================
 int main() {
-    const int N = (1 << 20);
+    const int N = (1 << 15);
     const int d = D;
 
     printf("Flash Attention — FMA + WMMA (Tensor Core) Implementation\n");

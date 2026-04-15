@@ -330,7 +330,7 @@ void naive_attention_cpu(
 // ===========================================================================
 int main() {
     // --- Configuration ---
-    const int N = (1 << 20);   // sequence length (must be divisible by Br and Bc)
+    const int N = (1 << 15);   // sequence length (must be divisible by Br and Bc)
     const int d = D;     // head dimension (must match compile-time D)
 
     printf("Flash Attention Demo\n");
