@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Sequence length — must be divisible by Br and Bc.
-#define N  (1 << 15)
+#define SEQ_LEN  (1 << 15)
 
 // Head dimension.
 // naive:     D ≤ 64 recommended (O_acc[D] lives in registers; 256 regs/thread

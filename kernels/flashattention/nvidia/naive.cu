@@ -172,6 +172,7 @@ void naive_attention_cpu(
 
 
 int main() {
+    const int N = SEQ_LEN;
     const int d = D;
 
     printf("Flash Attention — Naive CUDA\n");

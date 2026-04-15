@@ -170,10 +170,10 @@ void flash_attention_fma_wmma_forward(
         }
         __syncthreads();
 
-        // O += P · V via WMMA (all 4 warps; each handles 16 columns of D).
+        // O += P · V via WMMA.
+        // Warps stride over D in steps of NUM_WARPS*WMMA_N so the kernel
+        // handles any D that is a multiple of WMMA_N, regardless of warp count.
         {
-            const int col_offset = warp_id * 16;
-
             wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K,
                            half, wmma::row_major> p_frag;
             wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K,
@@ -181,14 +181,19 @@ void flash_attention_fma_wmma_forward(
             wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K,
                            float> o_frag;
 
-            // Seed accumulator with rescaled O so mma_sync adds P·V to it.
-            wmma::load_matrix_sync(o_frag, &O_smem[0][col_offset], D,
-                                   wmma::mem_row_major);
             wmma::load_matrix_sync(p_frag, &P_smem[0][0], Bc + PAD);
-            wmma::load_matrix_sync(v_frag, &V_smem[0][col_offset], D + PAD);
-            wmma::mma_sync(o_frag, p_frag, v_frag, o_frag);
-            wmma::store_matrix_sync(&O_smem[0][col_offset], o_frag, D,
-                                    wmma::mem_row_major);
+
+            for (int col_offset = warp_id * WMMA_N;
+                     col_offset < D;
+                     col_offset += NUM_WARPS * WMMA_N) {
+                // Seed accumulator with rescaled O so mma_sync adds P·V to it.
+                wmma::load_matrix_sync(o_frag, &O_smem[0][col_offset], D,
+                                       wmma::mem_row_major);
+                wmma::load_matrix_sync(v_frag, &V_smem[0][col_offset], D + PAD);
+                wmma::mma_sync(o_frag, p_frag, v_frag, o_frag);
+                wmma::store_matrix_sync(&O_smem[0][col_offset], o_frag, D,
+                                        wmma::mem_row_major);
+            }
         }
         __syncthreads();
 
@@ -245,6 +250,7 @@ void naive_attention_cpu(
 
 
 int main() {
+    const int N = SEQ_LEN;
     const int d = D;
 
     printf("Flash Attention — FMA + WMMA\n");
