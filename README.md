@@ -6,7 +6,7 @@ This project explores **GPU kernel performance analysis and optimization** using
 
 1. **Kernel 1**
 2. **Kernel 2**
-3. **FlashAttention**
+3. **Reduction**
 
 The project focuses on profiling these kernels on **NVIDIA A100 GPUs** and **AMD MI50 GPUs**, identifying performance bottlenecks, and applying architecture-specific optimizations to improve throughput, memory efficiency, and overall performance.
 
@@ -55,7 +55,7 @@ The project focuses on profiling these kernels on **NVIDIA A100 GPUs** and **AMD
 - Optimize 1
 - Optimize 2
 
-### FlashAttention
+### Reduction
 
 - Optimize 1
 - Optimize 2

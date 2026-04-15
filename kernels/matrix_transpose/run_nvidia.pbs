@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N reduction_nvidia
+#PBS -q normal
+#PBS -P personal
+#PBS -l select=1:ncpus=1:ngpus=1:mem=2GB
+#PBS -l walltime=00:05:00
+#PBS -j oe
+#PBS -o reduction_nvidia.log
+
+# Load module
+module load craype-accel-nvidia80
+
+cd "$PBS_O_WORKDIR"
+
+echo "=== Node: $(hostname) ==="
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+echo ""
+
+# Compile the CUDA programs
+nvcc -o reduction_nvidia reduction_nvidia.cu
+echo "Compiled OK"
+
+# Run the programs
+./reduction_nvidia 16777216   # 2^24 elements
+
+echo ""
+echo "=== Job finished: $(date) ==="
+echo "=== CSV outputs ==="
+ls -lh *.csv
