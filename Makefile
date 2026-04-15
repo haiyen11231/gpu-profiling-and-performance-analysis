@@ -1,5 +1,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Flash Attention — Naive + Optimised CUDA Kernels
+# Flash Attention — Naive + Optimised CUDA/HIP Kernels
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# NVIDIA targets:
+#   make naive               naive with CPU verification
+#   make naive-nocheck       naive without CPU verification
+#   make optimized           optimized with CPU verification
+#   make optimized-nocheck   optimized without CPU verification
+#   make build               all four NVIDIA binaries
+#   make profile-naive       nsys profile (nocheck)
+#   make profile-optimized   nsys profile (nocheck)
+#   make profile             both nsys profiles
+#
+# AMD targets (same pattern, -amd suffix):
+#   make naive-amd           make optimized-amd
+#   make naive-amd-nocheck   make optimized-amd-nocheck
+#   make build-amd
+#   make profile-amd-naive   make profile-amd-optimized
+#   make profile-amd
+#
 # ─────────────────────────────────────────────────────────────────────────────
 
 NVCC        := nvcc
@@ -7,7 +26,7 @@ CXX_STD     := -std=c++17
 
 # Compute capability: sm_70 = Volta, minimum for FP16 Tensor Cores (WMMA).
 # Run: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-# Common: 70 (V100), 75 (T4/RTX 20xx), 80 (A100), 86 (RTX 30xx), 89 (RTX 40xx)
+# Common: 70 (V100), 75 (T4/RTX 20xx), 80 (A100), 86 (RTX 30xx), 89 (RTX 40xx), 90 (H100/H200)
 ARCH        := -gencode arch=compute_80,code=sm_80
 
 # -lineinfo preserves source-line mappings so Nsight can annotate your code.
@@ -21,59 +40,57 @@ KERNEL_DIR  := kernels/flashattention/nvidia
 NAIVE_SRC   := $(KERNEL_DIR)/naive.cu
 OPT_SRC     := $(KERNEL_DIR)/optimized.cu
 
-NAIVE_BIN        := naive
-OPT_BIN          := optimized
-NAIVE_PROF_BIN   := naive_profile
-OPT_PROF_BIN     := optimized_profile
-
-TIMESTAMP        := $(shell date +%Y%m%d-%H%M%S)
+TIMESTAMP   := $(shell date +%Y%m%d-%H%M%S)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NVIDIA — build targets
+# ─────────────────────────────────────────────────────────────────────────────
 
-.PHONY: all build clean profile profile-naive profile-optimized
+.PHONY: all build naive naive-nocheck optimized optimized-nocheck
 
 all: build
 
-build: $(NAIVE_BIN) $(OPT_BIN)
+build: naive naive-nocheck optimized optimized-nocheck
 
-$(NAIVE_BIN): $(NAIVE_SRC)
+naive: $(NAIVE_SRC)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
-$(OPT_BIN): $(OPT_SRC)
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
-
-# Profile binaries skip CPU verification so nsys only captures GPU work.
-$(NAIVE_PROF_BIN): $(NAIVE_SRC)
+naive-nocheck: $(NAIVE_SRC)
 	$(NVCC) $(NVCC_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
 
-$(OPT_PROF_BIN): $(OPT_SRC)
+optimized: $(OPT_SRC)
+	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+
+optimized-nocheck: $(OPT_SRC)
 	$(NVCC) $(NVCC_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Profiling — Nsight Systems
+# NVIDIA — Nsight Systems profiling (always nocheck so nsys captures GPU only)
 #   --trace=cuda        captures kernel launches, memcpy, and API calls
 #   --cuda-memory-usage tracks device memory allocations over time
 #   --output            names the .nsys-rep artefact
 # ─────────────────────────────────────────────────────────────────────────────
 
+.PHONY: profile profile-naive profile-optimized
+
 profile: profile-naive profile-optimized
 
-profile-naive: $(NAIVE_PROF_BIN)
+profile-naive: naive-nocheck
 	nsys profile \
 	    --trace=cuda,nvtx \
 	    --cuda-memory-usage=true \
-		--gpu-metrics-device all \
+	    --gpu-metrics-device=all \
 	    --output=naive-$(TIMESTAMP) \
-	    ./$(NAIVE_PROF_BIN)
+	    ./naive-nocheck
 	@echo "Saved: naive-$(TIMESTAMP).nsys-rep"
 
-profile-optimized: $(OPT_PROF_BIN)
+profile-optimized: optimized-nocheck
 	nsys profile \
 	    --trace=cuda,nvtx \
 	    --cuda-memory-usage=true \
-		--gpu-metrics-device all \
+	    --gpu-metrics-device=all \
 	    --output=optimized-$(TIMESTAMP) \
-	    ./$(OPT_PROF_BIN)
+	    ./optimized-nocheck
 	@echo "Saved: optimized-$(TIMESTAMP).nsys-rep"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,50 +103,54 @@ AMD_DIR     := kernels/flashattention/amd
 NAIVE_AMD_SRC   := $(AMD_DIR)/naive.cpp
 OPT_AMD_SRC     := $(AMD_DIR)/optimized.cpp
 
-NAIVE_AMD_BIN       := naive_amd
-OPT_AMD_BIN         := optimized_amd
-NAIVE_AMD_PROF_BIN  := naive_amd_profile
-OPT_AMD_PROF_BIN    := optimized_amd_profile
-
-# Set --offload-arch to match your GPU (gfx90a = MI250X, gfx908 = MI100, gfx1100 = RX 7900).
+# Set --offload-arch to match your GPU:
+#   gfx942  = MI300X
+#   gfx90a  = MI250X
+#   gfx908  = MI100
+#   gfx1100 = RX 7900 XT
 AMD_ARCH    := gfx942
 HIP_FLAGS   := -std=c++17 -O3 -g --offload-arch=$(AMD_ARCH)
 
-.PHONY: build-amd profile-amd profile-amd-naive profile-amd-optimized
+.PHONY: build-amd naive-amd naive-amd-nocheck optimized-amd optimized-amd-nocheck
 
-build-amd: $(NAIVE_AMD_BIN) $(OPT_AMD_BIN)
+build-amd: naive-amd naive-amd-nocheck optimized-amd optimized-amd-nocheck
 
-$(NAIVE_AMD_BIN): $(NAIVE_AMD_SRC)
+naive-amd: $(NAIVE_AMD_SRC)
 	$(HIPCC) $(HIP_FLAGS) -o $@ $<
 
-$(OPT_AMD_BIN): $(OPT_AMD_SRC)
+naive-amd-nocheck: $(NAIVE_AMD_SRC)
+	$(HIPCC) $(HIP_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
+
+optimized-amd: $(OPT_AMD_SRC)
 	$(HIPCC) $(HIP_FLAGS) -o $@ $<
 
-$(NAIVE_AMD_PROF_BIN): $(NAIVE_AMD_SRC)
+optimized-amd-nocheck: $(OPT_AMD_SRC)
 	$(HIPCC) $(HIP_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
 
-$(OPT_AMD_PROF_BIN): $(OPT_AMD_SRC)
-	$(HIPCC) $(HIP_FLAGS) -DSKIP_CPU_VERIFY -o $@ $<
-
-# Profiling — rocprof
+# ─────────────────────────────────────────────────────────────────────────────
+# AMD — rocprof profiling
 #   --hip-trace   captures HIP API calls and kernel launches
 #   --hsa-trace   captures HSA runtime calls (lower-level)
+# ─────────────────────────────────────────────────────────────────────────────
+
+.PHONY: profile-amd profile-amd-naive profile-amd-optimized
+
 profile-amd: profile-amd-naive profile-amd-optimized
 
-profile-amd-naive: $(NAIVE_AMD_PROF_BIN)
+profile-amd-naive: naive-amd-nocheck
 	rocprof --hip-trace --hsa-trace \
 	    -o naive-amd-$(TIMESTAMP).csv \
-	    ./$(NAIVE_AMD_PROF_BIN)
+	    ./naive-amd-nocheck
 	@echo "Saved: naive-amd-$(TIMESTAMP).csv"
 
-profile-amd-optimized: $(OPT_AMD_PROF_BIN)
+profile-amd-optimized: optimized-amd-nocheck
 	rocprof --hip-trace --hsa-trace \
 	    -o optimized-amd-$(TIMESTAMP).csv \
-	    ./$(OPT_AMD_PROF_BIN)
+	    ./optimized-amd-nocheck
 	@echo "Saved: optimized-amd-$(TIMESTAMP).csv"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -f $(NAIVE_BIN) $(OPT_BIN) $(NAIVE_PROF_BIN) $(OPT_PROF_BIN)
-	rm -f $(NAIVE_AMD_BIN) $(OPT_AMD_BIN) $(NAIVE_AMD_PROF_BIN) $(OPT_AMD_PROF_BIN)
+	rm -f naive naive-nocheck optimized optimized-nocheck
+	rm -f naive-amd naive-amd-nocheck optimized-amd optimized-amd-nocheck

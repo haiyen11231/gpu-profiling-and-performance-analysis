@@ -174,8 +174,15 @@ void naive_attention_cpu(
 }
 
 
-int main() {
-    const int N = SEQ_LEN;
+int main(int argc, char* argv[]) {
+    int N = SEQ_LEN;
+    if (argc > 1) {
+        N = atoi(argv[1]);
+        if (N <= 0 || N % Br != 0 || N % Bc != 0) {
+            fprintf(stderr, "Error: N must be a positive multiple of Br=%d and Bc=%d\n", Br, Bc);
+            return EXIT_FAILURE;
+        }
+    }
     const int d = D;
 
     printf("Flash Attention — Naive CUDA\n");
