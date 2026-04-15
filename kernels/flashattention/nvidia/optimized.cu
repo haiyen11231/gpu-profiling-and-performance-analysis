@@ -25,26 +25,13 @@
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "config.cuh"
 
 using namespace nvcuda;
 
-#define Br   16    // Q-tile rows (= WMMA M)
-#define Bc   16    // K/V-tile rows (= WMMA N)
-#define D    256   // head dimension
-#define PAD  8     // shared memory padding to avoid bank conflicts
-                   // (D+PAD)/2 = 132 four-byte words; 132 % 32 = 4 → no conflict
-
-#define WMMA_M 16
-#define WMMA_N 16
-#define WMMA_K 16
-
-#define NUM_THREADS 128
-#define NUM_WARPS   (NUM_THREADS / 32)   // = 4
-
-// Shared memory per block (~43 KB, fits in 48 KB):
-//   Q/K/V: 3 × 16×264×2 = 25,344 B    S: 16×16×4 = 1,024 B
-//   P:     16×24×2       =    768 B    O: 16×256×4 = 16,384 B
-//   m/l:   2 × 16×4      =    128 B
+// Shared memory per block (~43 KB at D=256, fits in 48 KB):
+//   Q/K/V: 3 × Br×(D+PAD)×2    S: Br×Bc×4    P: Br×(Bc+PAD)×2
+//   O:     Br×D×4               m/l: 2×Br×4
 
 #define CUDA_CHECK(call)                                                      \
     do {                                                                      \

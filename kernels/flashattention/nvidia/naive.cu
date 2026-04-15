@@ -17,10 +17,7 @@
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-#define Br 16    // Q-tile rows
-#define Bc 16    // K/V-tile rows
-#define D  64    // head dimension
+#include "config.cuh"
 
 // Shared memory: Q(4KB) + K(4KB) + V(4KB) + S(1KB) ≈ 13 KB/block
 // Registers:    O_acc[D=64] = 64 regs/thread × 256 threads/block ≈ 16K (fits in 64K)
@@ -175,7 +172,6 @@ void naive_attention_cpu(
 
 
 int main() {
-    const int N = (1 << 15);
     const int d = D;
 
     printf("Flash Attention — Naive CUDA\n");
