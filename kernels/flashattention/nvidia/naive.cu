@@ -34,7 +34,7 @@
 
 
 /**
- * flash_attention_forward
+ * flash_attention_naive
  *
  * Grid:  (N/Br) blocks — one per Q-tile
  * Block: (Bc, Br) — threadIdx.x = K column, threadIdx.y = Q row
@@ -43,7 +43,7 @@
  * online softmax and accumulating the output in registers.
  */
 __global__ __launch_bounds__(Br * Bc, 2)
-void flash_attention_forward(
+void flash_attention_naive(
     const float* __restrict__ Q,
     const float* __restrict__ K,
     const float* __restrict__ V,

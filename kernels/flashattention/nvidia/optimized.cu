@@ -42,13 +42,13 @@ using namespace nvcuda;
 
 
 /**
- * flash_attention_fma_wmma_forward
+ * flash_attention_optimized
  *
  * Grid:  (N/Br) blocks — one per Q-tile
  * Block: 128 threads (4 warps), flat 1D
  */
 __global__ __launch_bounds__(NUM_THREADS, 2)
-void flash_attention_fma_wmma_forward(
+void flash_attention_optimized(
     const half*  __restrict__ Q,
     const half*  __restrict__ K,
     const half*  __restrict__ V,
