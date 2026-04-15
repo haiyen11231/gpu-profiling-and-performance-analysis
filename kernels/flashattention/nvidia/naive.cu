@@ -39,7 +39,7 @@
 // ---------------------------------------------------------------------------
 #define Br 16    // Q block rows  (reduced from 32 to lower register pressure)
 #define Bc 16    // K/V block rows (reduced from 32 to lower register pressure)
-#define D  256    // head dimension (fixed for this example)
+#define D  64    // head dimension (fixed for this example)
 
 // Register budget check:
 //   O_acc[D=64] = 64 regs/thread  (the main consumer)
@@ -330,7 +330,7 @@ void naive_attention_cpu(
 // ===========================================================================
 int main() {
     // --- Configuration ---
-    const int N = 256;   // sequence length (must be divisible by Br and Bc)
+    const int N = (1 << 20);   // sequence length (must be divisible by Br and Bc)
     const int d = D;     // head dimension (must match compile-time D)
 
     printf("Flash Attention Demo\n");
