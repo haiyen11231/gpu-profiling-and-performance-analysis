@@ -44,7 +44,7 @@
  * online softmax and accumulating the output in registers.
  */
 __global__ __launch_bounds__(Br * Bc, 2)
-void flash_attention_forward(
+void flash_attention_naive(
     const float* __restrict__ Q,
     const float* __restrict__ K,
     const float* __restrict__ V,
@@ -213,14 +213,14 @@ int main() {
     dim3 block(Bc, Br);
 
     // Warmup then timed run.
-    flash_attention_forward<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
+    flash_attention_naive<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
     HIP_CHECK(hipDeviceSynchronize());
 
     hipEvent_t start, stop;
     HIP_CHECK(hipEventCreate(&start));
     HIP_CHECK(hipEventCreate(&stop));
     HIP_CHECK(hipEventRecord(start));
-    flash_attention_forward<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
+    flash_attention_naive<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
     HIP_CHECK(hipEventRecord(stop));
     HIP_CHECK(hipEventSynchronize(stop));
 

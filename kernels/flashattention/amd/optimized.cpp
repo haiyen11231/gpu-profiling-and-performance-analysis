@@ -56,7 +56,7 @@ using namespace rocwmma;
  * Block: NUM_THREADS threads (NUM_WAVEFRONTS wavefronts), flat 1D
  */
 __global__ __launch_bounds__(NUM_THREADS, 2)
-void flash_attention_fma_wmma_forward(
+void flash_attention_optimized(
     const __half* __restrict__ Q,
     const __half* __restrict__ K,
     const __half* __restrict__ V,
