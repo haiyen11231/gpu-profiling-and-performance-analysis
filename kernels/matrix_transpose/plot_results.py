@@ -35,7 +35,7 @@ NV_LINE    = "#76b900"   # NVIDIA green
 AMD_LINE   = "#ed1c24"   # AMD red
 
 PEAK_BW  = {"NVIDIA A100": 2039.0, "AMD MI50": 1024.0}   # GB/s
-K_LABELS = ["K1\nBaseline\n(divergent)", "K2\nShared Mem\n(seq+unroll)", "K3\nShuffle\n(vendor-opt)"]
+K_LABELS = ["K1\nBaseline", "K2\nShared Mem", "K3\nShuffle"]
 
 # ── Demo data ──────────────────────────────────────────────────────────
 def demo_data():
@@ -85,7 +85,7 @@ def fig1_bandwidth(nv, am, out_dir):
     for ax, col, title, ylabel, ref in [
         (axes[0], "bandwidth_GBs", "Achieved Memory Bandwidth", "GB/s",
          [PEAK_BW["NVIDIA A100"], PEAK_BW["AMD MI50"]]),
-        (axes[1], "pct_peak_bw",   "% of Peak Bandwidth (fair cross-platform metric)", "% of peak",
+        (axes[1], "pct_peak_bw",   "% of Peak Bandwidth", "% of peak",
          [100, 100]),
     ]:
         b1 = ax.bar(x - w/2, nv[col], w, color=NV_COLORS, alpha=0.88,
@@ -120,7 +120,7 @@ def fig1_bandwidth(nv, am, out_dir):
         ax.legend(handles=handles, fontsize=8)
         ax.set_ylim(0, max(nv[col].max(), am[col].max()) * 1.30)
 
-    fig.suptitle("Memory Bandwidth — NVIDIA A100 vs AMD MI50  (higher = better)",
+    fig.suptitle("Memory Bandwidth — NVIDIA A100 vs AMD MI50",
                  fontweight="bold", fontsize=12)
     plt.tight_layout()
     savefig(fig, "fig1_bandwidth.png", out_dir)
@@ -146,7 +146,7 @@ def fig2_sweep(sweep_nv, sweep_am, out_dir):
             x_mb = sub["array_size"] * 4 / (1024**2)
             ax.plot(x_mb, sub["bandwidth_GBs"], ls, color=color,
                     linewidth=2, markersize=6,
-                    label=f"K{kid}: {['Baseline','Shared Opt','Vendor Opt'][kid-1]}")
+                    label=f"K{kid}: {['Baseline','Shared Mem','Shuffle'][kid-1]}")
 
         ax.axhline(peak, color="black", ls="--", lw=1.2, alpha=0.55,
                    label=f"Peak BW {peak:.0f} GB/s")
@@ -189,7 +189,7 @@ def fig3_speedup_roofline(nv, am, out_dir):
         ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.05,
                 f"{bar.get_height():.2f}×", ha="center", va="bottom", fontsize=8.5)
     ax.axhline(1.0, color="gray", ls=":", lw=1.2)
-    ax.set_xticks(x); ax.set_xticklabels(["K2\nShared Opt", "K3\nVendor Shuffle"])
+    ax.set_xticks(x); ax.set_xticklabels(["K2", "K3"])
     ax.set_ylabel("Speedup vs K1 Baseline"); ax.set_ylim(0, max(max(nv_sp), max(am_sp)) * 1.25)
     ax.set_title("Speedup over Baseline\n(both platforms, K1=1×)", fontweight="bold", fontsize=10)
     ax.grid(axis="y", alpha=0.35)
@@ -233,11 +233,11 @@ def fig3_speedup_roofline(nv, am, out_dir):
 # ── Main ───────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--nvidia-results", default="results_nvidia.csv")
-    parser.add_argument("--amd-results",    default="results_amd.csv")
-    parser.add_argument("--nvidia-sweep",   default="sweep_nvidia.csv")
-    parser.add_argument("--amd-sweep",      default="sweep_amd.csv")
-    parser.add_argument("--out-dir",        default="plots")
+    parser.add_argument("--nvidia-results", default="./nvidia/results_nvidia.csv")
+    parser.add_argument("--amd-results",    default="./amd/results_amd.csv")
+    parser.add_argument("--nvidia-sweep",   default="./nvidia/sweep_nvidia.csv")
+    parser.add_argument("--amd-sweep",      default="./amd/sweep_amd.csv")
+    parser.add_argument("--out-dir",        default="./plots")
     parser.add_argument("--demo",           action="store_true")
     args = parser.parse_args()
 
