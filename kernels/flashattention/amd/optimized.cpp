@@ -295,11 +295,8 @@ int main(int argc, char* argv[]) {
     printf("  N=%d  d=%d  Br=%d  Bc=%d  WMMA=%dx%dx%d  threads=%d  wavefronts=%d\n\n",
            N, d, Br, Bc, WMMA_M, WMMA_N, WMMA_K, NUM_THREADS, NUM_WAVEFRONTS);
 
-    // Request extended LDS for the larger tiles.
-    HIP_CHECK(hipFuncSetAttribute(
-        (const void*)flash_attention_optimized,
-        hipFuncAttributeMaxDynamicSharedMemorySize,
-        SMEM_BYTES));
+    // No hipFuncSetAttribute needed: SMEM_BYTES < 64 KB (MI300X LDS limit).
+    // Dynamic LDS size is passed directly in the kernel launch triple-chevron.
 
     size_t mat_size_f32 = (size_t)N * d * sizeof(float);
     size_t mat_size_f16 = (size_t)N * d * sizeof(__half);
