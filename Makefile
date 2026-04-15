@@ -62,7 +62,7 @@ profile-naive: $(NAIVE_PROF_BIN)
 	nsys profile \
 	    --trace=cuda,nvtx \
 	    --cuda-memory-usage=true \
-		--gpu-metrics-device all
+		--gpu-metrics-device all \
 	    --output=naive-$(TIMESTAMP) \
 	    ./$(NAIVE_PROF_BIN)
 	@echo "Saved: naive-$(TIMESTAMP).nsys-rep"
@@ -71,7 +71,7 @@ profile-optimized: $(OPT_PROF_BIN)
 	nsys profile \
 	    --trace=cuda,nvtx \
 	    --cuda-memory-usage=true \
-		--gpu-metrics-device all
+		--gpu-metrics-device all \
 	    --output=optimized-$(TIMESTAMP) \
 	    ./$(OPT_PROF_BIN)
 	@echo "Saved: optimized-$(TIMESTAMP).nsys-rep"
