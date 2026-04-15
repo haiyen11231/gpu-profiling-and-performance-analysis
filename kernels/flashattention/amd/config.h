@@ -17,15 +17,16 @@
 #define Br_NAIVE  16
 #define Bc_NAIVE  32
 
-// Tile sizes for the optimized (FA2-style) kernel.
+// FA2-style tile sizes for the optimized kernel.
 // Br/WMMA_M must equal NUM_WAVEFRONTS so every wavefront owns one row-strip.
 //
-// AMD LDS is 64 KB hard limit — unlike NVIDIA's configurable 228 KB.
-// Br=32, Bc=16 → SMEM ≈ 21 KB → 3 blocks/CU = 6 wavefronts.
-// This beats the original (Br=Bc=16, 50% idle, 5 blocks = 10 wf, 5 effective)
-// while keeping smem low enough to maintain occupancy.
-#define Br  32    // Q-tile rows  (= NUM_WAVEFRONTS × WMMA_M = 2 × 16)
-#define Bc  16    // K/V-tile rows
+// Br=64, Bc=16 → static LDS ≈ 37 KB — fits in AMD's 64 KB hard limit
+// without hipFuncSetAttribute. All 4 wavefronts stay active for both
+// QK^T and P·V (zero idle wavefronts per block).
+// Tradeoff: occupancy drops from ~5 blocks/CU to ~1, but compute
+// utilisation improves significantly.
+#define Br  64    // Q-tile rows  (= NUM_WAVEFRONTS × WMMA_M = 4 × 16)
+#define Bc  16    // K/V-tile rows (kept small to stay within LDS budget)
 
 // ── optimized kernel only ────────────────────────────────────────────────────
 
@@ -38,9 +39,9 @@
 #define WMMA_N  16
 #define WMMA_K  16
 
-// Thread block: 128 threads = 2 wavefronts.
-// Br/WMMA_M = 32/16 = 2 = NUM_WAVEFRONTS — both wavefronts active for QK^T.
-#define NUM_THREADS  128
+// Thread block: 256 threads = 4 wavefronts.
+// Br / WMMA_M = 64 / 16 = 4 = NUM_WAVEFRONTS — all wavefronts active.
+#define NUM_THREADS  256
 
 // AMD wavefront size: 64 for CDNA (MI100/MI200/MI300), 32 for RDNA3 (RX 7000).
 // Must match --offload-arch: gfx9xx → 64, gfx11xx → 32.
