@@ -102,18 +102,21 @@ void flash_attention_forward(
         float m_new   = fmaxf(m_i, row_max);
         float rescale = expf(m_i - m_new);
 
+        // Compute P once; reuse across all D dimensions (Bc expfs instead of D×Bc).
+        float P_local[Bc];
         float local_sum = 0.0f;
-        for (int j = 0; j < Bc; j++)
-            local_sum += expf(S_tile[row][j] - m_new);
+        for (int j = 0; j < Bc; j++) {
+            P_local[j] = expf(S_tile[row][j] - m_new);
+            local_sum += P_local[j];
+        }
 
         l_i = rescale * l_i + local_sum;
 
-        // O += P · V; P recomputed from S_tile on the fly to avoid spilling
-        // Bc extra registers to local memory (which maps to HBM).
+        // O += P · V using cached P_local.
         for (int d_idx = 0; d_idx < D; d_idx++) {
             O_acc[d_idx] *= rescale;
             for (int j = 0; j < Bc; j++)
-                O_acc[d_idx] += expf(S_tile[row][j] - m_new) * V_tile[j][d_idx];
+                O_acc[d_idx] += P_local[j] * V_tile[j][d_idx];
         }
 
         m_i = m_new;
