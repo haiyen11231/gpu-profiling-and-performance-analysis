@@ -87,10 +87,14 @@ void flash_attention_naive(
     for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
 
         // Load K and V tiles.
+        // K_tile/V_tile have Bc rows but only Br threads in y — stride by Br
+        // so all Bc rows are covered (each thread loads ceil(Bc/Br) rows).
         int kv_base = kv_tile * Bc;
-        for (int d_idx = col; d_idx < D; d_idx += Bc) {
-            K_tile[row][d_idx] = K[(kv_base + row) * D + d_idx];
-            V_tile[row][d_idx] = V[(kv_base + row) * D + d_idx];
+        for (int r = row; r < Bc; r += Br) {
+            for (int d_idx = col; d_idx < D; d_idx += Bc) {
+                K_tile[r][d_idx] = K[(kv_base + r) * D + d_idx];
+                V_tile[r][d_idx] = V[(kv_base + r) * D + d_idx];
+            }
         }
         __syncthreads();
 
