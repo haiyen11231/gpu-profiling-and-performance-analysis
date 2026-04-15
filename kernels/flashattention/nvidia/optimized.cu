@@ -245,7 +245,6 @@ void naive_attention_cpu(
 
 
 int main() {
-    const int N = 256;
     const int d = D;
 
     printf("Flash Attention — FMA + WMMA\n");
