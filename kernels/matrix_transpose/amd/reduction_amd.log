@@ -1,0 +1,17 @@
+==========================================================
+  Parallel Reduction - AMD MI50 (HIP)
+  Array: 16777216 elements  (64.00 MB)
+==========================================================
+
+Device: AMD Instinct MI50/MI60 | CUs: 60 | WavefrontSize: 64 | Mem: 32.0 GB | Peak BW: 1024 GB/s
+
+--- K1: Baseline (interleaved, divergent)
+  Time: 0.3205 ms | BW: 209.36 GB/s | %Peak: 20.4% | Speedup: 1.00x [OK]
+
+--- K2: Shared Mem Opt (sequential+wavefront unroll)
+  Time: 0.1566 ms | BW: 428.44 GB/s | %Peak: 41.8% | Speedup: 2.05x [OK]
+
+--- K3: Wavefront Shuffle (__shfl_down, AMD MI50)
+  Time: 0.1498 ms | BW: 448.07 GB/s | %Peak: 43.8% | Speedup: 2.14x [OK]
+
+Results written to results_amd.csv and sweep_amd.csv

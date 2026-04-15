@@ -13,10 +13,7 @@
  *   - Final unroll in K2 covers 64 levels, not 32
  *   - Shared mem for inter-warp in K3: blockDim.x/64 slots (not /32)
  *   - Block size must be multiple of 64; 256 recommended (avoids register spill)
- *
- * Compile:
- *   hipcc -O3 --offload-arch=gfx906 -o reduction_amd reduction_amd.cpp
- *
+ * 
  * Run:
  *   ./reduction_amd [array_size]
  */
@@ -27,7 +24,7 @@
 #include <hip/hip_runtime.h>
 
 /* ------------------------------------------------------------------ */
-/* Macros & timing                                                      */
+/* Macros & timing                                                    */
 /* ------------------------------------------------------------------ */
 #define HIP_CHECK(call)                                                 \
     do {                                                                \
@@ -48,10 +45,7 @@ static float timer_stop (void) {
 }
 
 /* ================================================================== */
-/* K1 - Baseline: interleaved addressing, heavy thread divergence      */
-/*                                                                      */
-/* On MI50 (wavefront=64) this is *worse* than on NVIDIA (warp=32):   */
-/* 64 lanes must serialize divergent paths instead of 32.              */
+/* K1 - Baseline: interleaved addressing, heavy thread divergence     */
 /* ================================================================== */
 __global__ void reduce_baseline(const float *g_in, float *g_out, int n)
 {
@@ -71,13 +65,7 @@ __global__ void reduce_baseline(const float *g_in, float *g_out, int n)
 }
 
 /* ================================================================== */
-/* K2 - Shared memory optimized                                        */
-/*                                                                      */
-/* Same logic as NVIDIA K2 but the final unroll covers 64 levels       */
-/* (one full wavefront on GCN) rather than 32.                         */
-/*                                                                      */
-/* The volatile pointer trick avoids compiler reordering; no           */
-/* __syncthreads needed because all 64 lanes execute together.         */
+/* K2 - Shared memory optimized                                       */
 /* ================================================================== */
 __global__ void reduce_shared(const float *g_in, float *g_out, int n)
 {
@@ -111,14 +99,7 @@ __global__ void reduce_shared(const float *g_in, float *g_out, int n)
 }
 
 /* ================================================================== */
-/* K3 - Wavefront shuffle optimized (AMD MI50-specific)                */
-/*                                                                      */
-/* Key differences from the NVIDIA K3:                                 */
-/*   - warpSize == 64 at runtime on MI50/GCN                          */
-/*   - __shfl_down() has no mask (GCN wavefronts are always convergent)*/
-/*   - Shuffle loop starts at offset 32 (half of 64), not 16           */
-/*   - warp_sums[] needs blockDim.x/64 slots, not /32                 */
-/*   - Block size should be a multiple of 64 (use 256)                 */
+/* K3 - Wavefront shuffle optimized (AMD MI50-specific)               */
 /* ================================================================== */
 __global__ void reduce_wavefront(const float *g_in, float *g_out, int n)
 {
@@ -160,35 +141,47 @@ __global__ void reduce_wavefront(const float *g_in, float *g_out, int n)
 static float run_kernel(int kid, const float *d_in, float *d_tmp, float *d_out,
                          int n, int threads, float *out_ms)
 {
-    int blocks = (n + threads * 2 - 1) / (threads * 2);
     int smem   = threads * sizeof(float);
 
     timer_start();
 
-    if      (kid == 1) hipLaunchKernelGGL(reduce_baseline,   blocks, threads, smem, 0, d_in, d_tmp, n);
-    else if (kid == 2) hipLaunchKernelGGL(reduce_shared,     blocks, threads, smem, 0, d_in, d_tmp, n);
-    else               hipLaunchKernelGGL(reduce_wavefront,  blocks, threads, 16*sizeof(float), 0, d_in, d_tmp, n);
+    int curr_n = n;
 
-    if (blocks > 1) {
-        int b2 = (blocks + threads * 2 - 1) / (threads * 2);
-        if (b2 < 1) b2 = 1;
-        if      (kid == 1) hipLaunchKernelGGL(reduce_baseline,  b2, threads, smem, 0, d_tmp, d_out, blocks);
-        else if (kid == 2) hipLaunchKernelGGL(reduce_shared,    b2, threads, smem, 0, d_tmp, d_out, blocks);
-        else               hipLaunchKernelGGL(reduce_wavefront, b2, threads, 16*sizeof(float), 0, d_tmp, d_out, blocks);
-    } else {
-        HIP_CHECK(hipMemcpy(d_out, d_tmp, sizeof(float), hipMemcpyDeviceToDevice));
+    const float *d_src = d_in;
+    float *d_a         = d_tmp;
+    float *d_b         = d_out;
+    float *d_dst       = d_a;
+
+    while (curr_n > 1) {
+        int blocks = (kid == 1)
+                   ? (curr_n + threads - 1) / threads
+                   : (curr_n + threads * 2 - 1) / (threads * 2);
+
+        if (kid == 1)
+            hipLaunchKernelGGL(reduce_baseline, blocks, threads, smem, 0, d_src, d_dst, curr_n);
+        else if (kid == 2)
+            hipLaunchKernelGGL(reduce_shared, blocks, threads, smem, 0, d_src, d_dst, curr_n);
+        else
+            hipLaunchKernelGGL(reduce_wavefront, blocks, threads, 16 * sizeof(float), 0, d_src, d_dst, curr_n);
+
+        HIP_CHECK(hipDeviceSynchronize());
+
+        curr_n = blocks;
+
+        /* Keep input read-only across runs by ping-ponging workspace buffers only. */
+        d_src = d_dst;
+        d_dst = (d_dst == d_a) ? d_b : d_a;
     }
 
-    HIP_CHECK(hipDeviceSynchronize());
     *out_ms = timer_stop();
 
     float result = 0.0f;
-    HIP_CHECK(hipMemcpy(&result, d_out, sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(&result, d_src, sizeof(float), hipMemcpyDeviceToHost));
     return result;
 }
 
 /* ================================================================== */
-/* Main                                                                 */
+/* Main                                                                */
 /* ================================================================== */
 int main(int argc, char *argv[])
 {
@@ -206,17 +199,20 @@ int main(int argc, char *argv[])
            prop.name, prop.multiProcessorCount, prop.warpSize,
            prop.totalGlobalMem / 1073741824.0, peak_bw);
 
-    float *h = (float *)malloc(n * sizeof(float));
-    for (int i = 0; i < n; i++) h[i] = 1.0f;
+    int max_n = (n > (1 << 26)) ? n : (1 << 26);
+    float *h = (float *)malloc(max_n * sizeof(float));
+    for (int i = 0; i < max_n; i++) h[i] = 1.0f;
     float expected = (float)n;
 
+    int threads   = 256;   /* multiple of 64 (wavefront size); 256 avoids register spill on GCN */
+
     float *d_in, *d_tmp, *d_out;
+    int work_elems = (n + threads - 1) / threads;  /* worst-case first pass is K1 */
     HIP_CHECK(hipMalloc(&d_in,  n * sizeof(float)));
-    HIP_CHECK(hipMalloc(&d_tmp, ((n / 512) + 2) * sizeof(float)));
-    HIP_CHECK(hipMalloc(&d_out, sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_tmp, work_elems * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_out, work_elems * sizeof(float)));
     HIP_CHECK(hipMemcpy(d_in, h, n * sizeof(float), hipMemcpyHostToDevice));
 
-    int threads   = 256;   /* multiple of 64 (wavefront size); 256 avoids register spill on GCN */
     int warmup    = 3;
     int bench     = 10;
     float base_ms = 0.0f;
@@ -245,7 +241,8 @@ int main(int argc, char *argv[])
         float bw      = (n * 4.0f) / (avg_ms * 1e-3f) / 1e9f;
         float pct     = bw / peak_bw * 100.0f;
         float speedup = (kid == 1) ? 1.0f : base_ms / avg_ms;
-        int   ok      = fabsf(result - expected) < 1.0f;
+        float rel_err = fabsf(result - expected) / expected;
+        int   ok      = rel_err < 1e-5f;
         if (kid == 1) base_ms = avg_ms;
 
         printf("--- %s\n  Time: %.4f ms | BW: %.2f GB/s | %%Peak: %.1f%% | Speedup: %.2fx [%s]\n\n",
@@ -262,9 +259,10 @@ int main(int argc, char *argv[])
     for (int si = 0; si < 6; si++) {
         int sz = sizes[si];
         float *d_i2, *d_t2, *d_o2;
+        int work_elems2 = (sz + threads - 1) / threads;
         HIP_CHECK(hipMalloc(&d_i2, sz * sizeof(float)));
-        HIP_CHECK(hipMalloc(&d_t2, ((sz / 512) + 2) * sizeof(float)));
-        HIP_CHECK(hipMalloc(&d_o2, sizeof(float)));
+        HIP_CHECK(hipMalloc(&d_t2, work_elems2 * sizeof(float)));
+        HIP_CHECK(hipMalloc(&d_o2, work_elems2 * sizeof(float)));
         HIP_CHECK(hipMemcpy(d_i2, h, sz * sizeof(float), hipMemcpyHostToDevice));
 
         for (int kid = 1; kid <= 3; kid++) {
