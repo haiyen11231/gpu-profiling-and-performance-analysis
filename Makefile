@@ -26,6 +26,8 @@ OPT_BIN          := optimized
 NAIVE_PROF_BIN   := naive_profile
 OPT_PROF_BIN     := optimized_profile
 
+TIMESTAMP        := $(shell date +%Y%m%d-%H%M%S)
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 .PHONY: all build clean profile profile-naive profile-optimized
@@ -60,20 +62,19 @@ profile-naive: $(NAIVE_PROF_BIN)
 	nsys profile \
 	    --trace=cuda \
 	    --cuda-memory-usage=true \
-	    --output=naive \
+	    --output=naive-$(TIMESTAMP) \
 	    ./$(NAIVE_PROF_BIN)
-	@echo "Saved: naive.nsys-rep  (open with: nsys-ui naive.nsys-rep)"
+	@echo "Saved: naive-$(TIMESTAMP).nsys-rep"
 
 profile-optimized: $(OPT_PROF_BIN)
 	nsys profile \
 	    --trace=cuda \
 	    --cuda-memory-usage=true \
-	    --output=optimized \
+	    --output=optimized-$(TIMESTAMP) \
 	    ./$(OPT_PROF_BIN)
-	@echo "Saved: optimized.nsys-rep  (open with: nsys-ui optimized.nsys-rep)"
+	@echo "Saved: optimized-$(TIMESTAMP).nsys-rep"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 clean:
 	rm -f $(NAIVE_BIN) $(OPT_BIN) $(NAIVE_PROF_BIN) $(OPT_PROF_BIN)
-	rm -f *.nsys-rep *.sqlite *.qdrep
