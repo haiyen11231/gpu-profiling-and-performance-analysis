@@ -92,7 +92,7 @@ NAIVE_AMD_PROF_BIN  := naive_amd_profile
 OPT_AMD_PROF_BIN    := optimized_amd_profile
 
 # Set --offload-arch to match your GPU (gfx90a = MI250X, gfx908 = MI100, gfx1100 = RX 7900).
-AMD_ARCH    := gfx90a
+AMD_ARCH    := gfx942
 HIP_FLAGS   := -std=c++17 -O3 -g --offload-arch=$(AMD_ARCH)
 
 .PHONY: build-amd profile-amd profile-amd-naive profile-amd-optimized
