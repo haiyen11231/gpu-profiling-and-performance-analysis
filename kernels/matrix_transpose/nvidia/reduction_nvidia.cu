@@ -195,9 +195,6 @@ int main(int argc, char *argv[])
            prop.name, prop.multiProcessorCount, prop.warpSize,
            prop.totalGlobalMem / 1073741824.0, peak_bw);
 
-    /* Host data */
-    // float *h = (float *)malloc(n * sizeof(float));
-    // for (int i = 0; i < n; i++) h[i] = 1.0f;
     float *h = (float *)malloc(max_n * sizeof(float));
     for (int i = 0; i < max_n; i++) h[i] = 1.0f;
     float expected = (float)n;
