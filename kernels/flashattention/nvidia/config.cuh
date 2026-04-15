@@ -13,9 +13,15 @@
 // optimized: designed for D=256; supports up to D=256 with current tile sizes.
 #define D  64
 
-// Tile sizes — shared by both kernels.
-#define Br  16    // Q-tile rows
-#define Bc  16    // K/V-tile rows
+// Tile sizes for the naive kernel.
+// Constrained by dim3(Bc, Br) ≤ 1024 threads and O_acc[D] register budget.
+#define Br_NAIVE  16
+#define Bc_NAIVE  32
+
+// Tile sizes for the optimized (FA2-style) kernel.
+// Br/WMMA_M must equal NUM_WARPS so every warp owns exactly one row-strip.
+#define Br  64    // Q-tile rows  (= NUM_WARPS × WMMA_M = 4 × 16)
+#define Bc  64    // K/V-tile rows
 
 // ── optimized kernel only ────────────────────────────────────────────────────
 

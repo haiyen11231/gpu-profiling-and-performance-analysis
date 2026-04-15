@@ -20,8 +20,15 @@
 #include <stdlib.h>
 #include "config.h"
 
-// Shared memory: Q(4KB) + K(4KB) + V(4KB) + S(1KB) ≈ 13 KB/block
-// VGPRs:        O_acc[D=64] = 64 regs/thread × 256 threads/block ≈ 16K (fits)
+// Naive kernel uses its own (smaller) tile sizes: dim3(Bc, Br) must be ≤ 1024.
+// Override the optimized-kernel Br/Bc with the naive-specific values.
+#undef Br
+#undef Bc
+#define Br Br_NAIVE
+#define Bc Bc_NAIVE
+
+// Shared memory: Q(4KB) + K(8KB) + V(8KB) + S(2KB) ≈ 22 KB/block
+// VGPRs:        O_acc[D=64] = 64 regs/thread × 512 threads/block ≈ 32K (fits)
 
 #define HIP_CHECK(call)                                                       \
     do {                                                                      \

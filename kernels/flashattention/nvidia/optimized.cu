@@ -1,21 +1,21 @@
 /**
- * Flash Attention — FMA + WMMA (Tensor Core) CUDA Implementation
+ * Flash Attention — FA2-style FMA + WMMA (Tensor Core) CUDA Implementation
  *
- * Two optimisations over the naive kernel:
- *   1. WMMA — S = Q·Kᵀ and O += P·V use FP16 Tensor Cores via nvcuda::wmma.
- *   2. FMA  — online softmax rescaling uses __fmaf_rn() for fused multiply-add.
- *
- * Mixed precision: FP16 input, FP32 accumulation.
+ * Key differences from the original optimized kernel:
+ *   1. Tile sizes: Br=64, Bc=64 (up from 16×16) — 16× more arithmetic per tile.
+ *   2. All warps contribute to QK^T and P·V — no idle warps.
+ *      Each warp owns a 16-row strip of S and O (row_base = warp_id × WMMA_M).
+ *   3. Dynamic shared memory (~69 KB) to accommodate the larger tiles.
  *
  * Thread block: 128 threads = 4 warps
- *   Warp 0:       S = Q·Kᵀ (16×16 WMMA output)
- *   Threads 0-15: scalar online softmax (one thread per Q-row)
- *   Warps 0-3:    O += P·V (each warp covers 16 of D=256 columns)
+ *   QK^T:     warp i computes S[i*16 : (i+1)*16, 0:Bc] — Bc/WMMA_N × D/WMMA_K ops
+ *   Softmax:  threads 0-63 (one per Q-row), threads 64-127 idle
+ *   P·V:      warp i computes O[i*16 : (i+1)*16, 0:D]  — D/WMMA_N × Bc/WMMA_K ops
  *
  * Requires: sm_70+ (Volta or newer)
  *
  * Compile:
- *   nvcc -O3 -arch=sm_70 optimized.cu -o optimized
+ *   nvcc -O3 -arch=sm_80 optimized.cu -o optimized
  */
 
 #include <cuda_runtime.h>
@@ -40,12 +40,34 @@ using namespace nvcuda;
         }                                                                     \
     } while (0)
 
+// Shared memory size in bytes — used for both kernel attribute and launch.
+// Layout (flat 1D, aligned to largest type = float):
+//   Q [Br][D+PAD]  half
+//   K [Bc][D+PAD]  half
+//   V [Bc][D+PAD]  half
+//   S [Br][Bc]     float
+//   P [Br][Bc+PAD] half
+//   O [Br][D]      float
+//   m [Br]         float
+//   l [Br]         float
+static constexpr size_t SMEM_BYTES =
+    sizeof(half)  * Br * (D + PAD) +
+    sizeof(half)  * Bc * (D + PAD) +
+    sizeof(half)  * Bc * (D + PAD) +
+    sizeof(float) * Br * Bc        +
+    sizeof(half)  * Br * (Bc + PAD)+
+    sizeof(float) * Br * D         +
+    sizeof(float) * Br * 2;
+
 
 /**
  * flash_attention_optimized
  *
  * Grid:  (N/Br) blocks — one per Q-tile
- * Block: 128 threads (4 warps), flat 1D
+ * Block: 128 threads (4 warps = NUM_WARPS), flat 1D
+ *
+ * FA2-style warp partitioning: warp i owns rows [i*WMMA_M : (i+1)*WMMA_M]
+ * of S and O, so all four warps do useful WMMA work every iteration.
  */
 __global__ __launch_bounds__(NUM_THREADS, 2)
 void flash_attention_optimized(
@@ -62,76 +84,88 @@ void flash_attention_optimized(
 
     const float scale = 1.0f / sqrtf((float)D);
 
-    __shared__ half  Q_smem[Br][D + PAD];
-    __shared__ half  K_smem[Bc][D + PAD];
-    __shared__ half  V_smem[Bc][D + PAD];
-    __shared__ float S_smem[Br][Bc];
-    __shared__ half  P_smem[Br][Bc + PAD];
-    __shared__ float O_smem[Br][D];
-    __shared__ float m_smem[Br];
-    __shared__ float l_smem[Br];
+    // ── Dynamic shared memory layout ─────────────────────────────────────────
+    extern __shared__ char smem_raw[];
+    half  *Q_smem = (half  *) smem_raw;
+    half  *K_smem = Q_smem + Br * (D + PAD);
+    half  *V_smem = K_smem + Bc * (D + PAD);
+    float *S_smem = (float *)(V_smem + Bc * (D + PAD));
+    half  *P_smem = (half  *)(S_smem + Br * Bc);
+    float *O_smem = (float *)(P_smem + Br * (Bc + PAD));
+    float *m_smem =           O_smem + Br * D;
+    float *l_smem =           m_smem + Br;
 
-    // Load Q-tile — stays resident for the full inner loop
+    // ── Load Q-tile (stays resident for the full KV loop) ────────────────────
     const int q_row_base   = tile_idx * Br;
     const int q_tile_elems = Br * (D + PAD);
     for (int idx = tid; idx < q_tile_elems; idx += NUM_THREADS) {
         int r = idx / (D + PAD);
         int c = idx % (D + PAD);
-        Q_smem[r][c] = (c < D) ? Q[(q_row_base + r) * D + c] : __float2half(0.0f);
+        Q_smem[idx] = (c < D) ? Q[(q_row_base + r) * D + c] : __float2half(0.0f);
     }
 
-    // Initialise O accumulator and softmax stats
+    // ── Initialise O accumulator and softmax stats ───────────────────────────
     for (int idx = tid; idx < Br * D; idx += NUM_THREADS)
-        O_smem[idx / D][idx % D] = 0.0f;
+        O_smem[idx] = 0.0f;
     if (tid < Br) {
         m_smem[tid] = -FLT_MAX;
         l_smem[tid] = 0.0f;
     }
     __syncthreads();
 
-    // Main loop: sweep all K/V-tiles
+    // ── Main loop: sweep all K/V-tiles ───────────────────────────────────────
     const int num_kv_tiles = N / Bc;
 
     for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
 
-        // Load K and V tiles
+        // Load K and V tiles into shared memory.
         const int kv_row_base   = kv_tile * Bc;
         const int kv_tile_elems = Bc * (D + PAD);
         for (int idx = tid; idx < kv_tile_elems; idx += NUM_THREADS) {
             int r = idx / (D + PAD);
             int c = idx % (D + PAD);
             if (c < D) {
-                K_smem[r][c] = K[(kv_row_base + r) * D + c];
-                V_smem[r][c] = V[(kv_row_base + r) * D + c];
+                K_smem[idx] = K[(kv_row_base + r) * D + c];
+                V_smem[idx] = V[(kv_row_base + r) * D + c];
             } else {
-                K_smem[r][c] = __float2half(0.0f);
-                V_smem[r][c] = __float2half(0.0f);
+                K_smem[idx] = __float2half(0.0f);
+                V_smem[idx] = __float2half(0.0f);
             }
         }
         __syncthreads();
 
-        // S = Q · K^T via WMMA (warp 0 only).
-        // K_smem is [Bc][D+PAD] row-major. Loading with col_major gives
-        // B[k'][j] = K[j][k+k'] = Kᵀ[k+k'][j] — transposition for free.
-        if (warp_id == 0) {
+        // ── FA2: QK^T — all warps contribute ─────────────────────────────────
+        // Warp i computes S[row_base : row_base+WMMA_M, 0 : Bc].
+        // K_smem is [Bc][D+PAD] row-major; col_major load gives K^T for free:
+        //   k_frag B[i][j] = K_smem[col+j][k+i] = K^T[k+i, col+j].
+        {
+            const int row_base = warp_id * WMMA_M;
+
             wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K,
                            half, wmma::row_major> q_frag;
             wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K,
                            half, wmma::col_major> k_frag;
-            wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K,
-                           float> s_frag;
 
-            wmma::fill_fragment(s_frag, 0.0f);
-            for (int k = 0; k < D; k += WMMA_K) {
-                wmma::load_matrix_sync(q_frag, &Q_smem[0][k], D + PAD);
-                wmma::load_matrix_sync(k_frag, &K_smem[0][k], D + PAD);
-                wmma::mma_sync(s_frag, q_frag, k_frag, s_frag);
+            for (int col = 0; col < Bc; col += WMMA_N) {
+                wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K,
+                               float> s_frag;
+                wmma::fill_fragment(s_frag, 0.0f);
+
+                for (int k = 0; k < D; k += WMMA_K) {
+                    wmma::load_matrix_sync(q_frag,
+                        Q_smem + row_base * (D + PAD) + k, D + PAD);
+                    wmma::load_matrix_sync(k_frag,
+                        K_smem + col * (D + PAD) + k,      D + PAD);
+                    wmma::mma_sync(s_frag, q_frag, k_frag, s_frag);
+                }
+                wmma::store_matrix_sync(
+                    S_smem + row_base * Bc + col, s_frag, Bc,
+                    wmma::mem_row_major);
             }
-            wmma::store_matrix_sync(&S_smem[0][0], s_frag, Bc, wmma::mem_row_major);
         }
         __syncthreads();
 
-        // Online softmax (threads 0-15, one per Q-row).
+        // ── Online softmax (one thread per Q-row, tid < Br) ──────────────────
         if (tid < Br) {
             const int row = tid;
             float m_old = m_smem[row];
@@ -140,68 +174,71 @@ void flash_attention_optimized(
             // Scale S and find row max.
             float row_max = -FLT_MAX;
             for (int j = 0; j < Bc; j++) {
-                S_smem[row][j] *= scale;
-                row_max = fmaxf(row_max, S_smem[row][j]);
+                S_smem[row * Bc + j] *= scale;
+                row_max = fmaxf(row_max, S_smem[row * Bc + j]);
             }
 
             float m_new   = fmaxf(m_old, row_max);
             float rescale = expf(m_old - m_new);
 
-            // Rescale O accumulator for the updated max.
+            // Rescale accumulated O row for the updated max.
             for (int d_idx = 0; d_idx < D; d_idx++)
-                O_smem[row][d_idx] = __fmaf_rn(rescale, O_smem[row][d_idx], 0.0f);
+                O_smem[row * D + d_idx] = __fmaf_rn(rescale, O_smem[row * D + d_idx], 0.0f);
 
             // Compute P = exp(S - m_new); store as FP16 for WMMA.
             float local_sum = 0.0f;
             for (int j = 0; j < Bc; j++) {
-                float p_val = expf(S_smem[row][j] - m_new);
-                P_smem[row][j] = __float2half(p_val);
+                float p_val = expf(S_smem[row * Bc + j] - m_new);
+                P_smem[row * (Bc + PAD) + j] = __float2half(p_val);
                 local_sum += p_val;
             }
             for (int j = Bc; j < Bc + PAD; j++)
-                P_smem[row][j] = __float2half(0.0f);
+                P_smem[row * (Bc + PAD) + j] = __float2half(0.0f);
 
-            // l_new = rescale * l_old + local_sum  (textbook FMA: a*b+c, c ≠ 0)
+            // l_new = rescale * l_old + local_sum  (FMA: a*b+c, c ≠ 0)
             l_smem[row] = __fmaf_rn(rescale, l_old, local_sum);
             m_smem[row] = m_new;
         }
         __syncthreads();
 
-        // O += P · V via WMMA.
-        // Warps stride over D in steps of NUM_WARPS*WMMA_N so the kernel
-        // handles any D that is a multiple of WMMA_N, regardless of warp count.
+        // ── FA2: O += P·V — all warps contribute ─────────────────────────────
+        // Warp i computes O[row_base : row_base+WMMA_M, 0 : D].
+        // Accumulator seeded from O_smem (already rescaled above).
         {
+            const int row_base = warp_id * WMMA_M;
+
             wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K,
                            half, wmma::row_major> p_frag;
             wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K,
                            half, wmma::row_major> v_frag;
-            wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K,
-                           float> o_frag;
 
-            wmma::load_matrix_sync(p_frag, &P_smem[0][0], Bc + PAD);
+            for (int col = 0; col < D; col += WMMA_N) {
+                wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K,
+                               float> o_frag;
+                wmma::load_matrix_sync(o_frag,
+                    O_smem + row_base * D + col, D, wmma::mem_row_major);
 
-            for (int col_offset = warp_id * WMMA_N;
-                     col_offset < D;
-                     col_offset += NUM_WARPS * WMMA_N) {
-                // Seed accumulator with rescaled O so mma_sync adds P·V to it.
-                wmma::load_matrix_sync(o_frag, &O_smem[0][col_offset], D,
-                                       wmma::mem_row_major);
-                wmma::load_matrix_sync(v_frag, &V_smem[0][col_offset], D + PAD);
-                wmma::mma_sync(o_frag, p_frag, v_frag, o_frag);
-                wmma::store_matrix_sync(&O_smem[0][col_offset], o_frag, D,
-                                        wmma::mem_row_major);
+                for (int k = 0; k < Bc; k += WMMA_K) {
+                    wmma::load_matrix_sync(p_frag,
+                        P_smem + row_base * (Bc + PAD) + k, Bc + PAD);
+                    wmma::load_matrix_sync(v_frag,
+                        V_smem + k * (D + PAD) + col,       D + PAD);
+                    wmma::mma_sync(o_frag, p_frag, v_frag, o_frag);
+                }
+                wmma::store_matrix_sync(
+                    O_smem + row_base * D + col, o_frag, D,
+                    wmma::mem_row_major);
             }
         }
         __syncthreads();
 
-    } // end K/V-tile loop
+    } // end KV-tile loop
 
-    // Final normalisation and write back to HBM.
+    // ── Final normalisation and write back to HBM ────────────────────────────
     for (int idx = tid; idx < Br * D; idx += NUM_THREADS) {
         int r = idx / D;
-        int c = idx % D;
         float inv_l = 1.0f / l_smem[r];
-        O[(tile_idx * Br + r) * D + c] = O_smem[r][c] * inv_l;
+        O[(tile_idx * Br + r) * D + (idx % D)] = O_smem[idx] * inv_l;
     }
     if (tid < Br)
         L[tile_idx * Br + tid] = m_smem[tid] + logf(l_smem[tid]);
@@ -257,13 +294,19 @@ int main(int argc, char* argv[]) {
     }
     const int d = D;
 
-    printf("Flash Attention — FMA + WMMA\n");
+    printf("Flash Attention — FA2-style FMA + WMMA\n");
     printf("  N=%d  d=%d  Br=%d  Bc=%d  WMMA=%dx%dx%d  threads=%d\n\n",
            N, d, Br, Bc, WMMA_M, WMMA_N, WMMA_K, NUM_THREADS);
 
-    size_t mat_size_f32 = N * d * sizeof(float);
-    size_t mat_size_f16 = N * d * sizeof(half);
-    size_t vec_size     = N * sizeof(float);
+    // Request extended shared memory for the larger tiles.
+    CUDA_CHECK(cudaFuncSetAttribute(
+        flash_attention_optimized,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        SMEM_BYTES));
+
+    size_t mat_size_f32 = (size_t)N * d * sizeof(float);
+    size_t mat_size_f16 = (size_t)N * d * sizeof(half);
+    size_t vec_size     = (size_t)N * sizeof(float);
 
     float* h_Q_f32 = (float*)malloc(mat_size_f32);
     float* h_K_f32 = (float*)malloc(mat_size_f32);
@@ -303,14 +346,14 @@ int main(int argc, char* argv[]) {
     dim3 block(NUM_THREADS);
 
     // Warmup then timed run.
-    flash_attention_optimized<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
+    flash_attention_optimized<<<grid, block, SMEM_BYTES>>>(d_Q, d_K, d_V, d_O, d_L, N);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
     CUDA_CHECK(cudaEventRecord(start));
-    flash_attention_optimized<<<grid, block>>>(d_Q, d_K, d_V, d_O, d_L, N);
+    flash_attention_optimized<<<grid, block, SMEM_BYTES>>>(d_Q, d_K, d_V, d_O, d_L, N);
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
 

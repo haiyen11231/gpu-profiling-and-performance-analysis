@@ -19,7 +19,14 @@
 #include <stdlib.h>
 #include "config.cuh"
 
-// Shared memory: Q(4KB) + K(4KB) + V(4KB) + S(1KB) ≈ 13 KB/block
+// Naive kernel uses its own (smaller) tile sizes: dim3(Bc, Br) must be ≤ 1024.
+// Override the optimized-kernel Br/Bc with the naive-specific values.
+#undef Br
+#undef Bc
+#define Br Br_NAIVE
+#define Bc Bc_NAIVE
+
+// Shared memory: Q(4KB) + K(8KB) + V(8KB) + S(2KB) ≈ 22 KB/block
 // Registers:    O_acc[D=64] = 64 regs/thread × 256 threads/block ≈ 16K (fits in 64K)
 
 #define CUDA_CHECK(call)                                                      \
