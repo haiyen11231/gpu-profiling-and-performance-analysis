@@ -1,0 +1,17 @@
+==========================================================
+  Parallel Reduction - NVIDIA A100 (CUDA)
+  Array: 16777216 elements  (64.00 MB)
+==========================================================
+
+Device: NVIDIA A100-SXM4-40GB | SMs: 108 | WarpSize: 32 | Mem: 39.6 GB | Peak BW: 1555.2 GB/s
+
+--- K1: Baseline (interleaved, divergent)
+  Time: 0.3890 ms | BW: 172.53 GB/s | %Peak: 11.1% | Speedup: 1.00x [OK]
+
+--- K2: Shared Mem Opt (sequential+unroll)
+  Time: 0.0984 ms | BW: 681.71 GB/s | %Peak: 43.8% | Speedup: 3.95x [OK]
+
+--- K3: Warp Shuffle (__shfl_down_sync)
+  Time: 0.0922 ms | BW: 728.18 GB/s | %Peak: 46.8% | Speedup: 4.22x [OK]
+
+Results written to results_nvidia.csv and sweep_nvidia.csv

@@ -7,9 +7,6 @@
  *   K2: reduce_shared    - sequential addressing + shared memory + 2-elem load
  *   K3: reduce_warp      - warp shuffle (__shfl_down_sync, warpSize=32) + loop unroll
  *
- * Compile:
- *   nvcc -O3 -arch=sm_80 -o reduction_nvidia reduction_nvidia.cu
- *
  * Run:
  *   ./reduction_nvidia [array_size]
  */
@@ -20,7 +17,7 @@
 #include <cuda_runtime.h>
 
 /* ------------------------------------------------------------------ */
-/* Macros & timing                                                      */
+/* Macros & timing                                                    */
 /* ------------------------------------------------------------------ */
 #define CUDA_CHECK(call)                                                \
     do {                                                                \
@@ -41,10 +38,7 @@ static float  timer_stop (void) {
 }
 
 /* ================================================================== */
-/* K1 - Baseline: interleaved addressing, heavy thread divergence      */
-/*                                                                      */
-/* Problem: tid % (2*s) == 0 causes divergent branches inside warps.   */
-/* Half the threads are idle from the first step; wastes SM throughput. */
+/* K1 - Baseline: interleaved addressing, heavy thread divergence     */
 /* ================================================================== */
 __global__ void reduce_baseline(const float *g_in, float *g_out, int n)
 {
@@ -64,12 +58,7 @@ __global__ void reduce_baseline(const float *g_in, float *g_out, int n)
 }
 
 /* ================================================================== */
-/* K2 - Shared memory optimized (Mark Harris steps 3-5)                */
-/*                                                                      */
-/* Improvements over K1:                                                */
-/*   - Sequential addressing: no divergence, no bank conflicts          */
-/*   - 2-element load per thread: halves block count, more work/thread  */
-/*   - Final 32 threads unrolled: warp-synchronous, no __syncthreads   */
+/* K2 - Shared memory optimized                                       */
 /* ================================================================== */
 __global__ void reduce_shared(const float *g_in, float *g_out, int n)
 {
@@ -105,14 +94,7 @@ __global__ void reduce_shared(const float *g_in, float *g_out, int n)
 }
 
 /* ================================================================== */
-/* K3 - Warp shuffle optimized (NVIDIA-specific, warpSize = 32)        */
-/*                                                                      */
-/* Improvements over K2:                                                */
-/*   - __shfl_down_sync: register-to-register, eliminates shared mem   */
-/*     for the final reduction stage entirely                           */
-/*   - Only 1 shared mem slot per warp (32 slots max) for inter-warp   */
-/*   - mask 0xffffffff: all 32 lanes guaranteed active                  */
-/*   - #pragma unroll: compiler fully unrolls the 5-iteration loop      */
+/* K3 - Warp shuffle optimized (NVIDIA-specific, warpSize = 32)       */
 /* ================================================================== */
 __global__ void reduce_warp(const float *g_in, float *g_out, int n)
 {
@@ -148,47 +130,58 @@ __global__ void reduce_warp(const float *g_in, float *g_out, int n)
 }
 
 /* ================================================================== */
-/* Host driver: two-pass reduction                                      */
+/* Host driver: two-pass reduction                                    */
 /* ================================================================== */
 static float run_kernel(int kid, const float *d_in, float *d_tmp, float *d_out,
                          int n, int threads, float *out_ms)
 {
-    int blocks = (n + threads * 2 - 1) / (threads * 2);
-    int smem   = threads * sizeof(float);
+    int smem = threads * sizeof(float);
 
     timer_start();
 
-    /* First pass */
-    if      (kid == 1) reduce_baseline<<<blocks, threads, smem>>>(d_in, d_tmp, n);
-    else if (kid == 2) reduce_shared  <<<blocks, threads, smem>>>(d_in, d_tmp, n);
-    else               reduce_warp    <<<blocks, threads, 32*sizeof(float)>>>(d_in, d_tmp, n);
+    int curr_n = n;
 
-    /* Second pass (if needed) */
-    if (blocks > 1) {
-        int b2 = (blocks + threads * 2 - 1) / (threads * 2);
-        if (b2 < 1) b2 = 1;
-        if      (kid == 1) reduce_baseline<<<b2, threads, smem>>>(d_tmp, d_out, blocks);
-        else if (kid == 2) reduce_shared  <<<b2, threads, smem>>>(d_tmp, d_out, blocks);
-        else               reduce_warp    <<<b2, threads, 32*sizeof(float)>>>(d_tmp, d_out, blocks);
-    } else {
-        CUDA_CHECK(cudaMemcpy(d_out, d_tmp, sizeof(float), cudaMemcpyDeviceToDevice));
+    float *d_src = (float *)d_in;
+    float *d_a   = d_tmp;
+    float *d_b   = d_out;
+    float *d_dst = d_a;
+
+    while (curr_n > 1) {
+        int blocks = (kid == 1)
+                   ? (curr_n + threads - 1) / threads
+                   : (curr_n + threads * 2 - 1) / (threads * 2);
+
+        if (kid == 1)
+            reduce_baseline<<<blocks, threads, smem>>>(d_src, d_dst, curr_n);
+        else if (kid == 2)
+            reduce_shared<<<blocks, threads, smem>>>(d_src, d_dst, curr_n);
+        else
+            reduce_warp<<<blocks, threads, 32 * sizeof(float)>>>(d_src, d_dst, curr_n);
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        curr_n = blocks;
+
+        /* Keep d_in read-only across runs by ping-ponging only workspace buffers. */
+        d_src = d_dst;
+        d_dst = (d_dst == d_a) ? d_b : d_a;
     }
 
-    CUDA_CHECK(cudaDeviceSynchronize());
     *out_ms = timer_stop();
 
     float result = 0.0f;
-    CUDA_CHECK(cudaMemcpy(&result, d_out, sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&result, d_src, sizeof(float), cudaMemcpyDeviceToHost));
     return result;
 }
 
 /* ================================================================== */
-/* Main                                                                 */
+/* Main                                                               */
 /* ================================================================== */
 int main(int argc, char *argv[])
 {
     int n = (argc > 1) ? atoi(argv[1]) : (1 << 24);
     int max_n = 1 << 26; 
+    int threads = 256;
 
     printf("==========================================================\n");
     printf("  Parallel Reduction - NVIDIA A100 (CUDA)\n");
@@ -211,12 +204,12 @@ int main(int argc, char *argv[])
 
     /* Device buffers */
     float *d_in, *d_tmp, *d_out;
+    int work_elems = (n + threads - 1) / threads; /* worst-case first pass is K1 */
     CUDA_CHECK(cudaMalloc(&d_in,  n * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_tmp, ((n / 512) + 2) * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_out, sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_tmp, work_elems * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_out, work_elems * sizeof(float)));
     CUDA_CHECK(cudaMemcpy(d_in, h, n * sizeof(float), cudaMemcpyHostToDevice));
 
-    int threads    = 256;
     int warmup     = 3;
     int bench      = 10;
     float base_ms  = 0.0f;
@@ -246,7 +239,8 @@ int main(int argc, char *argv[])
         float bw      = (n * 4.0f) / (avg_ms * 1e-3f) / 1e9f;
         float pct     = bw / peak_bw * 100.0f;
         float speedup = (kid == 1) ? 1.0f : base_ms / avg_ms;
-        int   ok      = fabsf(result - expected) < 1.0f;
+        float rel_err = fabsf(result - expected) / expected;
+        int ok = rel_err < 1e-5f;
         if (kid == 1) base_ms = avg_ms;
 
         printf("--- %s\n  Time: %.4f ms | BW: %.2f GB/s | %%Peak: %.1f%% | Speedup: %.2fx [%s]\n\n",
@@ -264,9 +258,10 @@ int main(int argc, char *argv[])
     for (int si = 0; si < 6; si++) {
         int sz = sizes[si];
         float *d_i2, *d_t2, *d_o2;
+        int work_elems2 = (sz + threads - 1) / threads;
         CUDA_CHECK(cudaMalloc(&d_i2, sz * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_t2, ((sz / 512) + 2) * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_o2, sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_t2, work_elems2 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_o2, work_elems2 * sizeof(float)));
         CUDA_CHECK(cudaMemcpy(d_i2, h, sz * sizeof(float), cudaMemcpyHostToDevice));
 
         for (int kid = 1; kid <= 3; kid++) {
