@@ -49,19 +49,19 @@ static float timer_stop (void) {
 /* ================================================================== */
 __global__ void reduce_baseline(const float *g_in, float *g_out, int n)
 {
-    extern __shared__ float s[];
+    extern __shared__ float sdata[];
     unsigned int tid = threadIdx.x;
     unsigned int i   = blockIdx.x * blockDim.x + tid;
 
-    s[tid] = (i < n) ? g_in[i] : 0.0f;
+    sdata[tid] = (i < n) ? g_in[i] : 0.0f;
     __syncthreads();
 
     for (unsigned int stride = 1; stride < blockDim.x; stride *= 2) {
         if (tid % (2 * stride) == 0)          /* divergent within 64-wide wavefront */
-            s[tid] += s[tid + stride];
+            sdata[tid] += sdata[tid + stride];
         __syncthreads();
     }
-    if (tid == 0) g_out[blockIdx.x] = s[0];
+    if (tid == 0) g_out[blockIdx.x] = sdata[0];
 }
 
 /* ================================================================== */
@@ -69,24 +69,24 @@ __global__ void reduce_baseline(const float *g_in, float *g_out, int n)
 /* ================================================================== */
 __global__ void reduce_shared(const float *g_in, float *g_out, int n)
 {
-    extern __shared__ float s[];
+    extern __shared__ float sdata[];
     unsigned int tid = threadIdx.x;
     unsigned int i   = blockIdx.x * (blockDim.x * 2) + tid;
 
     float v = (i < n) ? g_in[i] : 0.0f;
     if (i + blockDim.x < n) v += g_in[i + blockDim.x];
-    s[tid] = v;
+    sdata[tid] = v;
     __syncthreads();
 
     /* Sequential stride, reduce to one wavefront (64 threads) */
     for (unsigned int stride = blockDim.x / 2; stride > 64; stride >>= 1) {
-        if (tid < stride) s[tid] += s[tid + stride];
+        if (tid < stride) sdata[tid] += sdata[tid + stride];
         __syncthreads();
     }
 
     /* Final wavefront (64 threads): unroll completely, no sync needed */
     if (tid < 64) {
-        volatile float *vs = s;
+        volatile float *vs = sdata;
         vs[tid] += vs[tid + 64];   /* extra level vs NVIDIA: covers full wavefront */
         vs[tid] += vs[tid + 32];
         vs[tid] += vs[tid + 16];
@@ -95,7 +95,7 @@ __global__ void reduce_shared(const float *g_in, float *g_out, int n)
         vs[tid] += vs[tid +  2];
         vs[tid] += vs[tid +  1];
     }
-    if (tid == 0) g_out[blockIdx.x] = s[0];
+    if (tid == 0) g_out[blockIdx.x] = sdata[0];
 }
 
 /* ================================================================== */
@@ -106,8 +106,8 @@ __global__ void reduce_wavefront(const float *g_in, float *g_out, int n)
     __shared__ float warp_sums[16];   /* max 1024/64 = 16 wavefronts */
 
     unsigned int tid    = threadIdx.x;
-    unsigned int laneId = tid % warpSize;   /* 0..63 on MI50 */
-    unsigned int warpId = tid / warpSize;
+    unsigned int lane_id = tid % warpSize;   /* 0..63 on MI50 */
+    unsigned int warp_id = tid / warpSize;
     unsigned int i      = blockIdx.x * (blockDim.x * 2) + tid;
 
     /* Load two elements */
@@ -121,13 +121,13 @@ __global__ void reduce_wavefront(const float *g_in, float *g_out, int n)
         val += __shfl_down(val, offset);   /* no mask on AMD */
 
     /* Lane 0 of each wavefront stores partial sum */
-    if (laneId == 0) warp_sums[warpId] = val;
+    if (lane_id == 0) warp_sums[warp_id] = val;
     __syncthreads();
 
     /* First wavefront reduces all partial sums */
-    int numWarps = blockDim.x / warpSize;
-    val = (tid < (unsigned int)numWarps) ? warp_sums[tid] : 0.0f;
-    if (warpId == 0) {
+    unsigned int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+    val = (tid < num_warps) ? warp_sums[tid] : 0.0f;
+    if (warp_id == 0) {
         #pragma unroll
         for (int offset = 32; offset > 0; offset >>= 1)
             val += __shfl_down(val, offset);

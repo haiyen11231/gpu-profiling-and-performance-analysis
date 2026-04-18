@@ -79,7 +79,7 @@ __global__ void reduce_shared(const float *g_in, float *g_out, int n)
         __syncthreads();
     }
 
-    /* Final warp: unroll completely (warp executes in lockstep) */
+    /* Final warp: unroll completely */
     if (tid < 32) {
         volatile float *vs = sdata;
         vs[tid] += vs[tid + 32];
@@ -101,8 +101,8 @@ __global__ void reduce_warp(const float *g_in, float *g_out, int n)
     __shared__ float warp_sums[32];   /* one slot per warp; max 1024/32 = 32 */
 
     unsigned int tid    = threadIdx.x;
-    unsigned int laneId = tid & 31;
-    unsigned int warpId = tid >> 5;
+    unsigned int lane_id = tid % warpSize; 
+    unsigned int warp_id = tid / warpSize;
     unsigned int i      = blockIdx.x * (blockDim.x * 2) + tid;
 
     /* Load two elements */
@@ -115,13 +115,13 @@ __global__ void reduce_warp(const float *g_in, float *g_out, int n)
         val += __shfl_down_sync(0xffffffffu, val, offset);
 
     /* Lane 0 of each warp stores partial sum */
-    if (laneId == 0) warp_sums[warpId] = val;
+    if (lane_id == 0) warp_sums[warp_id] = val;
     __syncthreads();
 
     /* First warp reduces all partial sums */
-    unsigned int num_warps = (blockDim.x + 31) / 32;
+    unsigned int num_warps = (blockDim.x + warpSize - 1) / warpSize;
     val = (tid < num_warps) ? warp_sums[tid] : 0.0f;
-    if (warpId == 0) {
+    if (warp_id == 0) {
         #pragma unroll
         for (int offset = 16; offset > 0; offset >>= 1)
             val += __shfl_down_sync(0xffffffffu, val, offset);
