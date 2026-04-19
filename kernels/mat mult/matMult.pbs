@@ -1,0 +1,18 @@
+#!/bin/bash
+#PBS -N cudaGrail
+#PBS -P 52001004
+#PBS -l select=1:ncpus=1:ngpus=1:mem=8
+#PBS -l walltime=00:10:00
+#PBS -j oe
+#PBS -o o.txt
+
+cd $PBS_O_WORKDIR
+
+module purge
+module load cuda/12.2.2
+
+nvcc cudaMatrixMult.cu -o run -O3 -DBLOCK_SIZE_X=16 -DREG_TILE_X=2 -DUF=4 -DVEC_TYPE=float4 -DNUM_STREAMS=4
+
+module load gcc
+
+./run
