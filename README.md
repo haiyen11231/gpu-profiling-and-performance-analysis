@@ -4,9 +4,9 @@
 
 This project explores **GPU kernel performance analysis and optimization** using these 3 kernels:
 
-1. **Kernel 1**
-2. **Kernel 2**
-3. **Reduction**
+1. **Matrix Multiplication**
+2. **Parallel Reduction**
+3. **Fash Attention**
 
 The project focuses on profiling these kernels on **NVIDIA A100 GPUs** and **AMD MI50 GPUs**, identifying performance bottlenecks, and applying architecture-specific optimizations to improve throughput, memory efficiency, and overall performance.
 
@@ -18,44 +18,56 @@ The project focuses on profiling these kernels on **NVIDIA A100 GPUs** and **AMD
 
 - **CUDA Toolkit** (for NVIDIA GPU support)
 - **ROCm / HIP** (for AMD GPU support)
+- **Python 3** with `numpy`, `pandas`, `matplotlib` (for plotting reduction results)
 
 ### Build Instructions
 
 #### NVIDIA GPU
 
 ```bash
-# Compile CUDA kernels
+# FlashAttention (from repo root)
+...
 
-# Run CUDA kernels
+# Parallel Reduction
+# Copy all files (reduction_nvidia.cu, run_nvidia.pbs) under directory kernels/parallel_reduction/nvidia to NVIDIA
+qsub run_nvidia.pbs
 
-# Run profiling scripts
+# GEMM
+...
 ```
 
-#### NVIDIA GPU
+Profiling (NVIDIA):
 
 ```bash
-# Compile HIP kernels
-
-# Run HIP kernels
-
-# Run profiling scripts
+# FlashAttention profiling (from repo root)
+...
 ```
 
----
+#### AMD GPU
 
-## Optimization Techniques Applied
+```bash
+# FlashAttention (from repo root)
+...
 
-### Kernel 1
+# Parallel Reduction
+# Copy all files (reduction_amd.cpp, run_amd.sh) under directory kernels/parallel_reduction/amd to AMD pod
+./run_amd.sh
 
-- Optimize 1
-- Optimize 2
+# GEMM
+...
+```
 
-### Kernel 2
+Profiling (AMD):
 
-- Optimize 1
-- Optimize 2
+```bash
+# FlashAttention profiling (from repo root)
+...
+```
 
-### Reduction
+### Plot Results (Parallel Reduction)
 
-- Optimize 1
-- Optimize 2
+Copy all results from NVIDIA and AMD to local and run:
+
+```bash
+python3 plot_results.py
+```
