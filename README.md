@@ -10,6 +10,8 @@ This project explores **GPU kernel performance analysis and optimization** using
 
 The project focuses on profiling these kernels on **NVIDIA A100 GPUs** and **AMD MI50 GPUs**, identifying performance bottlenecks, and applying architecture-specific optimizations to improve throughput, memory efficiency, and overall performance.
 
+For FlashAttention, the profiling is done on **NVIDIA H200 GPUs*** and **AMD MI300X GPUs** as AMD MI50 does not support Matrix Fused Multiply-Add (MFMA) and to ensure fair comparison (same generation).
+
 ---
 
 ## Setup
@@ -26,42 +28,32 @@ The project focuses on profiling these kernels on **NVIDIA A100 GPUs** and **AMD
 
 ```bash
 # FlashAttention (from repo root)
-...
+# Change directory to flash attention
+cd kernels/flashattention
+
+make build
 
 # Parallel Reduction
 # Copy all files (reduction_nvidia.cu, run_nvidia.pbs) under directory kernels/parallel_reduction/nvidia to NVIDIA
 qsub run_nvidia.pbs
 
 # GEMM
-...
-```
-
-Profiling (NVIDIA):
-
-```bash
-# FlashAttention profiling (from repo root)
-...
 ```
 
 #### AMD GPU
 
 ```bash
 # FlashAttention (from repo root)
-...
+cd kernels/flashattention
+
+make build-amd
 
 # Parallel Reduction
 # Copy all files (reduction_amd.cpp, run_amd.sh) under directory kernels/parallel_reduction/amd to AMD pod
 ./run_amd.sh
 
 # GEMM
-...
-```
 
-Profiling (AMD):
-
-```bash
-# FlashAttention profiling (from repo root)
-...
 ```
 
 ### Plot Results (Parallel Reduction)

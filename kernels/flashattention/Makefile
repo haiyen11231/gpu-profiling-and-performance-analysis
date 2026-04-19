@@ -35,7 +35,7 @@ WARN_FLAGS  := -Xcompiler -Wall,-Wextra
 
 NVCC_FLAGS  := $(CXX_STD) $(ARCH) $(OPT_FLAGS) $(WARN_FLAGS)
 
-KERNEL_DIR  := kernels/flashattention/nvidia
+KERNEL_DIR  := /nvidia
 
 NAIVE_SRC   := $(KERNEL_DIR)/naive.cu
 OPT_SRC     := $(KERNEL_DIR)/optimized.cu
@@ -99,7 +99,7 @@ profile-optimized: optimized-nocheck
 
 HIPCC       := hipcc
 
-AMD_DIR     := kernels/flashattention/amd
+AMD_DIR     := amd
 NAIVE_AMD_SRC   := $(AMD_DIR)/naive.cpp
 OPT_AMD_SRC     := $(AMD_DIR)/optimized.cpp
 
