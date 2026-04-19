@@ -1,23 +1,3 @@
-/**
- * Flash Attention — FA2-style FMA + WMMA (Tensor Core) CUDA Implementation
- *
- * Key differences from the original optimized kernel:
- *   1. Tile sizes: Br=64, Bc=64 (up from 16×16) — 16× more arithmetic per tile.
- *   2. All warps contribute to QK^T and P·V — no idle warps.
- *      Each warp owns a 16-row strip of S and O (row_base = warp_id × WMMA_M).
- *   3. Dynamic shared memory (~69 KB) to accommodate the larger tiles.
- *
- * Thread block: 128 threads = 4 warps
- *   QK^T:     warp i computes S[i*16 : (i+1)*16, 0:Bc] — Bc/WMMA_N × D/WMMA_K ops
- *   Softmax:  threads 0-63 (one per Q-row), threads 64-127 idle
- *   P·V:      warp i computes O[i*16 : (i+1)*16, 0:D]  — D/WMMA_N × Bc/WMMA_K ops
- *
- * Requires: sm_70+ (Volta or newer)
- *
- * Compile:
- *   nvcc -O3 -arch=sm_80 optimized.cu -o optimized
- */
-
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <mma.h>
@@ -84,7 +64,7 @@ void flash_attention_optimized(
 
     const float scale = 1.0f / sqrtf((float)D);
 
-    // ── Dynamic shared memory layout ─────────────────────────────────────────
+    // Dynamic shared memory layout
     extern __shared__ char smem_raw[];
     half  *Q_smem = (half  *) smem_raw;
     half  *K_smem = Q_smem + Br * (D + PAD);
@@ -95,7 +75,7 @@ void flash_attention_optimized(
     float *m_smem =           O_smem + Br * D;
     float *l_smem =           m_smem + Br;
 
-    // ── Load Q-tile (stays resident for the full KV loop) ────────────────────
+    // Load Q-tile (stays resident for the full KV loop)
     const int q_row_base   = tile_idx * Br;
     const int q_tile_elems = Br * (D + PAD);
     for (int idx = tid; idx < q_tile_elems; idx += NUM_THREADS) {
@@ -104,7 +84,7 @@ void flash_attention_optimized(
         Q_smem[idx] = (c < D) ? Q[(q_row_base + r) * D + c] : __float2half(0.0f);
     }
 
-    // ── Initialise O accumulator and softmax stats ───────────────────────────
+    // ── Initialise O accumulator and softmax stats
     for (int idx = tid; idx < Br * D; idx += NUM_THREADS)
         O_smem[idx] = 0.0f;
     if (tid < Br) {
@@ -113,7 +93,7 @@ void flash_attention_optimized(
     }
     __syncthreads();
 
-    // ── Main loop: sweep all K/V-tiles ───────────────────────────────────────
+    // ── Main loop: sweep all K/V-tiles
     const int num_kv_tiles = N / Bc;
 
     for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
@@ -134,7 +114,7 @@ void flash_attention_optimized(
         }
         __syncthreads();
 
-        // ── FA2: QK^T — all warps contribute ─────────────────────────────────
+        // FA2: QK^T — all warps contribute
         // Warp i computes S[row_base : row_base+WMMA_M, 0 : Bc].
         // K_smem is [Bc][D+PAD] row-major; col_major load gives K^T for free:
         //   k_frag B[i][j] = K_smem[col+j][k+i] = K^T[k+i, col+j].
@@ -165,7 +145,7 @@ void flash_attention_optimized(
         }
         __syncthreads();
 
-        // ── Online softmax (one thread per Q-row, tid < Br) ──────────────────
+        // Online softmax (one thread per Q-row, tid < Br)
         if (tid < Br) {
             const int row = tid;
             float m_old = m_smem[row];
@@ -201,7 +181,7 @@ void flash_attention_optimized(
         }
         __syncthreads();
 
-        // ── FA2: O += P·V — all warps contribute ─────────────────────────────
+        // FA2: O += P·V — all warps contribute
         // Warp i computes O[row_base : row_base+WMMA_M, 0 : D].
         // Accumulator seeded from O_smem (already rescaled above).
         {
@@ -234,7 +214,7 @@ void flash_attention_optimized(
 
     } // end KV-tile loop
 
-    // ── Final normalisation and write back to HBM ────────────────────────────
+    // Final normalisation and write back to HBM
     for (int idx = tid; idx < Br * D; idx += NUM_THREADS) {
         int r = idx / D;
         float inv_l = 1.0f / l_smem[r];
