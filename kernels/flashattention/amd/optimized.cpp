@@ -1,36 +1,3 @@
-/**
- * Flash Attention — FMA + rocWMMA (Matrix Core) HIP Implementation
- *
- * Direct port of the NVIDIA optimized kernel to HIP + rocWMMA.
- * The algorithm is identical; differences from the NVIDIA version:
- *
- *   - nvcuda::wmma    → rocwmma (header-only, same API shape)
- *   - warp  (32 threads) → wavefront (WAVEFRONT_SIZE threads, typically 64 on CDNA)
- *   - cuda_fp16.h     → hip/hip_fp16.h   (__half, __float2half, __half2float)
- *   - cuda* API       → hip* API
- *
- * Note on FA2-style warp partitioning:
- *   NVIDIA's FA2 approach (larger tiles, all warps active for QK^T) trades
- *   occupancy for WMMA utilisation. On NVIDIA (228 KB configurable SMEM) this
- *   is a net win. On AMD (64 KB hard LDS limit), the occupancy loss outweighs
- *   the WMMA gain because the kernel is memory-bandwidth bound, not compute
- *   bound. Small tiles (Br=Bc=16, ~12 KB LDS) allow ~5 blocks/CU = 10
- *   wavefronts, which maximises HBM latency hiding.
- *
- * Mixed precision: __half input, float accumulation.
- *
- * Thread block: NUM_THREADS threads = NUM_WAVEFRONTS wavefronts
- *   QK^T:    all wavefronts active; wavefront i owns S rows [i*16 : (i+1)*16]
- *   Softmax: threads 0-(Br-1), one thread per Q-row (192 threads idle)
- *   P·V:     all wavefronts active; wavefront i owns O rows [i*16 : (i+1)*16]
- *
- * Requires: ROCm with rocWMMA; CDNA (gfx9xx) or RDNA3 (gfx11xx).
- * For RDNA3 set WAVEFRONT_SIZE=32 in config.h.
- *
- * Compile:
- *   hipcc -O3 --offload-arch=gfx942 optimized.cpp -o optimized_amd
- */
-
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
 #include <rocwmma/rocwmma.hpp>
@@ -42,9 +9,6 @@
 
 using namespace rocwmma;
 
-// Shared memory per block (~37 KB at Br=64, Bc=16, D=64, PAD=8):
-//   Q: Br×(D+PAD)×2=9KB  K/V: 2×Bc×(D+PAD)×2=4.5KB  S: Br×Bc×4=4KB
-//   P: Br×(Bc+PAD)×2=3KB  O: Br×D×4=16KB  m/l: 2×Br×4=0.5KB
 
 #define HIP_CHECK(call)                                                       \
     do {                                                                      \
@@ -126,10 +90,10 @@ void flash_attention_optimized(
         }
         __syncthreads();
 
-        // S = Q · Kᵀ via rocWMMA — all wavefronts active.
+        // S = QK^T via rocWMMA — all wavefronts active.
         // Wavefront i owns S rows [i*WMMA_M : (i+1)*WMMA_M].
         // K_smem is [Bc][D+PAD] row-major. Loading with col_major gives
-        // B[k'][j] = K[j][k+k'] = Kᵀ[k+k'][j] — transposition for free.
+        // B[k'][j] = K[j][k+k'] = K^T[k+k'][j] — transposition for free.
         // Bc=16=WMMA_N so there is exactly one S column-tile per wavefront.
         {
             const int row_base = wavefront_id * WMMA_M;
@@ -221,7 +185,7 @@ void flash_attention_optimized(
 }
 
 
-// CPU reference: O = softmax(Q·Kᵀ / sqrt(d)) · V — O(N²) memory, correctness checks only.
+// CPU reference: O = softmax(QK^T / sqrt(d)) · V — O(N^2) memory, correctness checks only.
 void naive_attention_cpu(
     const float* Q, const float* K, const float* V,
     float* O, int N, int d
