@@ -63,3 +63,11 @@ Copy all results from NVIDIA and AMD to local and run:
 ```bash
 python3 plot_results.py
 ```
+
+### Matrix multiplication
+nvcc cudaMatMult.cu -o run_gemm -O3 -DBLOCK_SIZE_X=16 -DREG_TILE_X=2 -DUF=4 -DVEC_TYPE=float4 -DNUM_STREAMS=4
+qsub matMult.pbs
+
+hipcc rocmMatMult.cpp -o run_gemm -O3 -DBLOCK_SIZE_X=16 -DREG_TILE_X=2 -DUF=4 -DVEC_TYPE=float4 -DNUM_STREAMS=4
+
+
