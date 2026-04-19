@@ -34,7 +34,7 @@ AMD_COLORS = ["#9C27B0", "#FF9800", "#00BCD4"]   # purple, orange, cyan
 NV_LINE    = "#76b900"   # NVIDIA green
 AMD_LINE   = "#ed1c24"   # AMD red
 
-PEAK_BW  = {"NVIDIA A100": 2039.0, "AMD MI50": 1024.0}   # GB/s
+PEAK_BW  = {"NVIDIA A100": 1555.0, "AMD MI50": 1024.0}   # GB/s
 K_LABELS = ["K1\nBaseline", "K2\nShared Mem", "K3\nShuffle"]
 
 # ── Demo data ──────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ def fig1_bandwidth(nv, am, out_dir):
     Right panel: % of peak bandwidth     — fair cross-platform comparator
     
     Why % peak is the right metric:
-      A100 peak = 2039 GB/s, MI50 peak = 1024 GB/s.
+    A100 peak = 1555 GB/s, MI50 peak = 1024 GB/s.
       Raw GB/s will always favour A100; % peak shows how well each kernel
       uses the available hardware.
     """
